@@ -1,0 +1,15 @@
+Blue Bubble Club
+Copyright (c) 2026 Luca Silverentand
+
+Extracted from Seven's local iMessage transport. No Seven repository history,
+assistant policies, credentials or runtime data are distributed here.
+
+The native adapter patches Beeper platform-imessage at revision
+07d8d04f7145e0606df48e405f5c0be28aa207de (MIT), copyright Texts.com and
+Automattic Inc. Modified behavior: passive shared-process lifetime, exact
+same-user and message scope, one-attempt mutations, protected compose drafts,
+fixed diagnostic stages, isolated preferences, and non-injected native actions.
+See LICENSES/platform-imessage-LICENSE.txt and NativeMessages/beeper-bbc.patch.
+
+FluidAudio and its dependencies retain their own licenses. Model weights
+are optional, separately staged, and retain the licenses in LICENSES/.
