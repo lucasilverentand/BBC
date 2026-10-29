@@ -4,9 +4,9 @@ import AppKit
     enum Failure: Error { case outputPath, symbolUnavailable, bitmap, encoding }
     @MainActor static func main() throws {
         guard CommandLine.arguments.count == 2 else { throw Failure.outputPath }
-        let blue = NSColor(srgbRed: 0, green: 122.0 / 255.0, blue: 1, alpha: 1)
-        guard let symbol = NSImage(systemSymbolName: "message", accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [blue])) else {
+        let white = NSColor.white
+        guard let symbol = NSImage(systemSymbolName: "message.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [white])) else {
             throw Failure.symbolUnavailable
         }
         let canvas = NSRect(x: 0, y: 0, width: 1024, height: 1024)

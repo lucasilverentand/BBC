@@ -1,11 +1,11 @@
 Icon Composer composition
 =========================
 Native sky gradient, a transparent Clouds.png group, and a separate Message.png
-foreground. The message outline is Apple's SF Symbols "message" glyph, rendered
+foreground. The white filled message bubble is Apple's SF Symbols "message.fill" glyph, rendered
 by script/render_message_symbol.swift; its shine, refraction and shadow come from
 Icon Composer. It has no painted highlights. Groups are stored front to back.
 
-Regenerate the outline:
+Regenerate the filled white bubble:
 xcrun swiftc -j 1 -parse-as-library script/render_message_symbol.swift -o /tmp/bbc-message-symbol
 /tmp/bbc-message-symbol Assets/AppIcon.icon/Assets/Message.png
 
