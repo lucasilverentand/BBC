@@ -56,15 +56,7 @@ struct MediaStore {
             }
             guard valid else { throw ActionFailure.invalid }
         }
-        // Expired uploads and a fixed disk quota keep this local service bounded.
-        var used = 0
-        for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) where file.pathExtension == "json" {
-            guard let upload = try? JSONDecoder().decode(Upload.self, from: Data(contentsOf: file)) else { throw ActionFailure.unavailable }
-            if Date().timeIntervalSince(upload.created) > Self.lifetime {
-                try FileManager.default.removeItem(at: directory.appendingPathComponent(upload.filename))
-                try FileManager.default.removeItem(at: file)
-            } else { used += upload.bytes }
-        }
+        let used = try activeUsage()
         guard used + data.count <= 512 * 1024 * 1024 else { throw ActionFailure.unavailable }
         let upload = Upload(id: UUID(), ext: ext, mimeType: mime, bytes: data.count, created: Date())
         let file = directory.appendingPathComponent(upload.filename)
@@ -86,6 +78,76 @@ struct MediaStore {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: directory.appendingPathComponent(upload.id.uuidString + ".json").path)
             return upload
         } catch { try? FileManager.default.removeItem(at: file); throw error }
+    }
+    private func activeUsage() throws -> Int {
+        let records = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }
+        guard records.count <= 512 else { throw ActionFailure.unavailable }
+        var used = 0, activeCount = 0
+        for file in records {
+            let upload = try JSONDecoder().decode(Upload.self, from: Data(contentsOf: file))
+            guard upload.ext.range(of: "^[a-z0-9]{2,5}$", options: .regularExpression) != nil,
+                  upload.bytes > 0, upload.bytes <= Self.maximumBytes else { throw ActionFailure.invalid }
+            if Date().timeIntervalSince(upload.created) > Self.lifetime {
+                let media = directory.appendingPathComponent(upload.filename)
+                if directory.standardizedFileURL == Self.handoffDirectory.standardizedFileURL {
+                    // Never remove an uncertain handoff still used by Messages.
+                    let home = FileManager.default.homeDirectoryForCurrentUser
+                    let database = try? MessagesDatabase(url: home.appendingPathComponent("Library/Messages/chat.db"))
+                    let refs = try? database?.rows("SELECT 1 FROM attachment a JOIN message_attachment_join ma ON ma.attachment_id=a.ROWID JOIN message m ON m.ROWID=ma.message_id WHERE a.filename IN (?1,?2) AND (m.is_sent=1 OR COALESCE(m.error,0)=0) LIMIT 1", [media.path, media.resolvingSymlinksInPath().path])
+                    guard let refs, refs.isEmpty else { used += upload.bytes; activeCount += 1; continue }
+                }
+                if FileManager.default.fileExists(atPath: media.path) { try FileManager.default.removeItem(at: media) }
+                try FileManager.default.removeItem(at: file)
+            } else { used += upload.bytes; activeCount += 1 }
+        }
+        guard activeCount < 512 else { throw ActionFailure.unavailable }
+        return used
+    }
+    static var handoffDirectory: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("BlueBubbleClubTransfers", isDirectory: true)
+    }
+    /// The transfer agent cannot read another app's protected Application Support.
+    /// Keep the handoff private, bounded, and outside that protected directory.
+    static func stageHandoff(upload: Upload, source: URL, directory: URL = handoffDirectory) throws -> URL {
+        let store = try MediaStore(directory: directory)
+        guard Date().timeIntervalSince(upload.created) <= lifetime else { throw ActionFailure.invalid }
+        let metadata = directory.appendingPathComponent(upload.id.uuidString + ".json")
+        if FileManager.default.fileExists(atPath: metadata.path) {
+            let (saved, file) = try store.resolve(upload.id.uuidString)
+            guard saved.bytes == upload.bytes, saved.ext == upload.ext else { throw ActionFailure.invalid }
+            return file
+        }
+        let used = try store.activeUsage()
+        guard used + upload.bytes <= 512 * 1024 * 1024 else { throw ActionFailure.unavailable }
+        let fd = open(source.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { throw ActionFailure.invalid }; defer { close(fd) }
+        var before = stat()
+        guard fstat(fd, &before) == 0, before.st_mode & S_IFMT == S_IFREG, before.st_uid == getuid(),
+              before.st_size == upload.bytes, before.st_size > 0, before.st_size <= maximumBytes else { throw ActionFailure.invalid }
+        var data = Data(), buffer = [UInt8](repeating: 0, count: 65536)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            if count < 0 && errno == EINTR { continue }
+            guard count >= 0, data.count + count <= upload.bytes else { throw ActionFailure.invalid }
+            if count == 0 { break }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        var after = stat()
+        guard fstat(fd, &after) == 0, data.count == upload.bytes, before.st_size == after.st_size,
+              before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec,
+              before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec else { throw ActionFailure.invalid }
+        let file = directory.appendingPathComponent(upload.filename)
+        try data.write(to: file, options: .withoutOverwriting)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        try JSONEncoder().encode(upload).write(to: metadata, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: metadata.path)
+        return file
+    }
+    static func removeHandoff(upload: Upload, directory: URL = handoffDirectory) throws {
+        let store = try MediaStore(directory: directory)
+        let (_, file) = try store.resolve(upload.id.uuidString)
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.removeItem(at: directory.appendingPathComponent(upload.id.uuidString + ".json"))
     }
     func resolve(_ raw: String) throws -> (Upload, URL) {
         guard let id = UUID(uuidString: raw) else { throw ActionFailure.invalid }
@@ -110,19 +172,35 @@ extension MessagesDatabase {
         let offset = p["offset"]?.numberValue ?? 0, length = p["length"]?.numberValue ?? 524288
         guard offset.isFinite, offset >= 0, offset <= Double(MediaStore.maximumBytes), offset.rounded() == offset,
               length.isFinite, length >= 1, length <= 524288, length.rounded() == length else { throw ActionFailure.invalid }
+        let columns = try rows("PRAGMA table_info(attachment)", []).map { $0[1] }
+        let state = columns.contains("transfer_state") ? "COALESCE(a.transfer_state,-1)" : "-1"
+        let uti = columns.contains("uti") ? "COALESCE(a.uti,'')" : "''"
         let values = try rows("""
-            SELECT a.filename,COALESCE(a.mime_type,''),COALESCE(a.total_bytes,0)
+            SELECT a.filename,COALESCE(a.mime_type,''),COALESCE(a.total_bytes,0), \(state), \(uti)
             FROM attachment a JOIN message_attachment_join ma ON ma.attachment_id=a.ROWID
             JOIN message m ON m.ROWID=ma.message_id JOIN chat_message_join cm ON cm.message_id=m.ROWID JOIN chat c ON c.ROWID=cm.chat_id
             WHERE a.guid=?1 AND m.guid=?2 AND c.guid=?3 LIMIT 2
             """, [attachment, message, chat])
         guard values.count == 1, let row = values.first else { throw ActionFailure.invalid }
+        guard row[3] == "-1" || row[3] == "5" else { throw ActionFailure.unavailable }
         let data = try AttachmentFile.read(row[0], home: home, maximumBytes: MediaStore.maximumBytes)
-        guard (Int(row[2]) == 0 || Int(row[2]) == data.count), Int(offset) <= data.count else { throw ActionFailure.invalid }
+        guard (row[3] == "5" || Int(row[2]) == 0 || Int(row[2]) == data.count), Int(offset) <= data.count else { throw ActionFailure.invalid }
         let end = min(data.count, Int(offset) + Int(length))
-        return .object(["attachment_guid": .string(attachment), "mime_type": .string(row[1]), "total_bytes": .number(Double(data.count)),
+        return .object(["attachment_guid": .string(attachment), "mime_type": .string(MediaMIME.resolve(row[1], uti: row[4])), "total_bytes": .number(Double(data.count)),
                         "offset": .number(offset), "next_offset": .number(Double(end)), "complete": .bool(end == data.count),
                         "data_base64": .string(data[Int(offset)..<end].base64EncodedString())])
+    }
+    func handoffCopied(message: String, upload: MediaStore.Upload) throws -> Bool {
+        let values = try rows("""
+            SELECT a.filename FROM attachment a JOIN message_attachment_join ma ON ma.attachment_id=a.ROWID JOIN message m ON m.ROWID=ma.message_id
+            WHERE m.guid=?1 AND a.transfer_name=?2 AND a.transfer_state=5 LIMIT 2
+            """, [message, upload.filename])
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let root = home.appendingPathComponent("Library/Messages/Attachments").path + "/"
+        guard values.count == 1 else { return false }
+        let raw = values[0][0]
+        let expanded = raw.hasPrefix("~/") ? home.path + String(raw.dropFirst()) : raw
+        return URL(fileURLWithPath: expanded).standardizedFileURL.path.hasPrefix(root)
     }
     func confirmedMedia(to: String, upload: MediaStore.Upload, after: Int64) throws -> (String, String)? {
         let values = try rows("""
@@ -130,9 +208,16 @@ extension MessagesDatabase {
             JOIN message_attachment_join ma ON ma.message_id=m.ROWID JOIN attachment a ON a.ROWID=ma.attachment_id
             WHERE m.ROWID>CAST(?1 AS INTEGER) AND m.is_from_me=1 AND m.service='iMessage' AND m.is_sent=1 AND COALESCE(m.error,0)=0
             AND c.chat_identifier=?2 AND c.guid IN (?3,?4)
-            AND a.transfer_name=?5 AND a.total_bytes=CAST(?6 AS INTEGER) LIMIT 2
-            """, [String(after), to, "any;-;" + to, "iMessage;-;" + to, upload.filename, String(upload.bytes)])
+            AND a.transfer_name=?5 LIMIT 2
+            """, [String(after), to, "any;-;" + to, "iMessage;-;" + to, upload.filename])
         guard values.count <= 1 else { throw ActionFailure.uncertain }
         return values.first.map { ($0[0], $0[1]) }
+    }
+}
+
+enum MediaMIME {
+    static func resolve(_ mime: String, uti: String) -> String {
+        if !mime.isEmpty { return mime }
+        return UTType(uti)?.preferredMIMEType ?? (uti == "com.apple.coreaudio-format" ? "audio/x-caf" : "application/octet-stream")
     }
 }

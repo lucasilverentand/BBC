@@ -10,7 +10,7 @@ Every mutation requires an `Idempotency-Key` header containing a UUID chosen and
 | --- | --- |
 | `GET /v1/status` | Observed permissions and available methods |
 | `POST /v1/messages` | `to`, either `text` or uploaded `media_id`; always iMessage, SMS fallback disabled |
-| `POST /v1/messages/after` | `since_rowid`, `limit` (1–200); incremental messages and `next_rowid` |
+| `POST /v1/messages/after` | `since_rowid`, `limit` (1–200), optional exact `chat_guid`; incremental messages and `next_rowid` |
 | `POST /v1/messages/status` | `chat_guid`, `message_guid`; observed local sent/delivered/read flags |
 | `POST /v1/replies` | `chat_guid`, `message_guid`, `text`, `read_guids` |
 | `POST /v1/links` | `chat_guid`, `message_guid`, `url`, `read_guids` |
@@ -50,7 +50,7 @@ curl http://127.0.0.1:7861/v1/media/upload \
   -H 'Content-Type: application/octet-stream' --data-binary @photo.jpg
 ```
 
-Send `{"to":"person@example.com","media_id":"<returned UUID>"}` to `/v1/messages` with a new operation UUID. Each send accepts one upload or text. Audio is sent as a file attachment; BBC does not label it as a recorded voice note. Supported uploads: JPEG, PNG, GIF, HEIC/HEIF, WebP, TIFF; MOV, MP4/M4V; M4A, MP3, CAF, WAV, AIFF and AAC. BBC validates the local file before accepting it. Uploads expire after 24 hours, with a 512 MiB local quota; expired files are removed on the next upload. Successful receipts confirm an exact new sent attachment in the local database, not recipient delivery.
+Send `{"to":"person@example.com","media_id":"<returned UUID>"}` to `/v1/messages` with a new operation UUID. Each send accepts one upload or text. Media uses a private temporary handoff so the background sender can access the file without changing the Messages composer. Messages may rewrite media metadata; downloads return its completed local representation. Handoffs have a separate 512 MiB limit and are removed after a completed copy into Messages storage. Later sends prune handoffs older than 24 hours only when Messages no longer references them; pending files remain within the quota. Audio is sent as a file attachment; BBC does not label it as a recorded voice note. Supported uploads: JPEG, PNG, GIF, HEIC/HEIF, WebP, TIFF; MOV, MP4/M4V; M4A, MP3, CAF, WAV, AIFF and AAC. BBC validates the local file before accepting it. Uploads expire after 24 hours, with a 512 MiB local quota; expired files are removed on the next upload. Successful receipts confirm an exact new sent attachment in the local database, not recipient delivery.
 
 Request message pages with `attachments: true` to receive opaque attachment GUIDs, MIME types and byte counts; `is_audio_message` identifies native audio messages. `/v1/media/download` returns original bytes as `data_base64`, with `offset`, `next_offset`, `total_bytes` and `complete`. Request successive offsets until complete. Each chunk is at most 512 KiB; each attachment is at most 32 MiB. Downloads require the exact direct-chat/message/attachment tuple and a local file already available in Messages. Paths and remote download URLs are never accepted. Both sent and received attachments can be downloaded.
 

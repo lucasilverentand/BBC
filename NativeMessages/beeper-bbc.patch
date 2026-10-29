@@ -97,7 +97,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..a625ccc6 100644
+index bb6ae980..4c178c3b 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -328,6 +328,23 @@ index bb6ae980..a625ccc6 100644
          }
      }
  
+@@ -591,14 +599,14 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+ 
+     // performs `perform` while the Messages window is unhidden
+     private func withActivation(
+-        openBefore: URL?, openAfter: URL? = nil,
++        openBefore: URL?, openAfter: URL? = nil, activating: Bool = false,
+         perform: () throws -> Void
+     ) throws {
+         if let openBefore {
+             #if DEBUG
+             log.debug("withActivation: opening before performing: \(openBefore)")
+             #endif
+-            try openDeepLink(openBefore)
++            try openDeepLink(openBefore, activating: activating)
+         }
+ 
+         try perform()
 @@ -672,7 +680,7 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          log.debug("reveal: 5/5 done, proceeding with grabbing the cell")
      }
@@ -341,14 +358,15 @@ index bb6ae980..a625ccc6 100644
              try? closeReplyTranscriptView(wait: false)
          }
  
+-        try withActivation(openBefore: url) {
+-            try assertSelectedThread(threadID: threadID)
 +        // Capture identity before opening: an already selected direct chat need not
 +        // emit another focus notification. Names and group titles are ambiguous.
 +        let address = try splitThreadID(threadID).orThrow(ErrorMessage("invalid threadID")).2
 +        let selectedRow = elements.selectedThreadCell
 +        let selectedTitle = try? elements.mainWindow.title()
 +        let openingBegan = Date()
-         try withActivation(openBefore: url) {
--            try assertSelectedThread(threadID: threadID)
++        try withActivation(openBefore: url, activating: true) {
 +            readPhase?(.focus)
 +            try assertSelectedThread(threadID: threadID, openingBegan: openingBegan, verifiedSelection: {
 +                BBCThreadSelectionBoundary.mayReuseSelectedDirectChat(
@@ -372,44 +390,118 @@ index bb6ae980..a625ccc6 100644
              guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
                  guard let cell = try messageCell.overlay
                          ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
-@@ -765,12 +788,12 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -751,84 +774,80 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+     }
  
-             if case let .custom(emoji) = reaction, on {
-                 guard isSequoiaOrUp else { throw ErrorMessage("Custom emoji reactions are only supported on macOS 15 or later") }
+     func setReaction(threadID: String, messageCell: MessageCell, reaction: Reaction, on: Bool) throws {
+-        let startTime = Date()
+-        defer { log.debug("setReaction took \(startTime.timeIntervalSinceNow * -1000)ms") }
+-
+-        try prepareForAutomation()
+-        defer { finishedAutomation() }
+-
+-        try withMessageCell(threadID: threadID, messageCell: messageCell) {
+-            if let directAction = try directReactionAction(messageCell: $0, reaction: reaction) {
+-                try directAction()
+-                return
+-            }
+-
+-            if case let .custom(emoji) = reaction, on {
+-                guard isSequoiaOrUp else { throw ErrorMessage("Custom emoji reactions are only supported on macOS 15 or later") }
 -                // TODO: support being able to pick a skin tone
-+                let baseEmoji = String(emoji).withoutSkinToneModifiers.first ?? emoji
-                 let search: CharacterPickerSearch
-                 let supportsSkinToneVariants: Bool
-                 do {
+-                let search: CharacterPickerSearch
+-                let supportsSkinToneVariants: Bool
+-                do {
 -                    search = try CharacterPickerSearch(finding: emoji)
 -                    supportsSkinToneVariants = try EMFEmojiToken(character: emoji).supportsSkinToneVariants
-+                    search = try CharacterPickerSearch(finding: baseEmoji)
-+                    supportsSkinToneVariants = try EMFEmojiToken(character: baseEmoji).supportsSkinToneVariants
-                 } catch {
-                     throw ReactionSearchError(emoji: emoji, underlying: error)
-                 }
-@@ -791,7 +814,16 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
-                 try keyPresser.return() // select
-                 if supportsSkinToneVariants {
-                     Thread.sleep(forTimeInterval: 0.2) // wait for skin tone picker to appear
+-                } catch {
+-                    throw ReactionSearchError(emoji: emoji, underlying: error)
+-                }
+-                try openCustomEmojiReactionPicker(messageCell: $0)
+-                let searchField = try retry(withTimeout: 1.0, interval: 0.05) {
+-                    try elements.characterPickerSearchField
+-                }
+-                try searchField.value(assign: search.query)
+-                Thread.sleep(forTimeInterval: 0.75) // wait for search
+-                // focus the matrix (tab also seems to work for this? full keyboard access needed maybe?)
+-                try keyPresser.downArrow()
+-                // 6 columns in the character picker matrix
+-                let (downArrows, rightArrows) = search.position.quotientAndRemainder(dividingBy: 6)
+-                // navigate to the emoji
+-                for _ in 0..<downArrows { try keyPresser.downArrow(); Thread.sleep(forTimeInterval: 0.05) }
+-                for _ in 0..<rightArrows { try keyPresser.rightArrow(); Thread.sleep(forTimeInterval: 0.05) }
+-                Thread.sleep(forTimeInterval: 0.1) // wait for selection
+-                try keyPresser.return() // select
+-                if supportsSkinToneVariants {
+-                    Thread.sleep(forTimeInterval: 0.2) // wait for skin tone picker to appear
 -                    try keyPresser.return() // always select default skin tone
-+                    if baseEmoji != emoji {
-+                        // Never substitute the default tone for the requested emoji.
-+                        // Only press an exact variant exposed by the native picker.
-+                        let variant = try elements.characterPickerPopover.recursiveChildren().first {
-+                            (try? $0.identifier()) == String(emoji)
-+                                || ((try? $0.value()) as? String) == String(emoji)
-+                                || (try? $0.title()) == String(emoji)
-+                        }.orThrow(ErrorMessage("Requested emoji variant is not available in the native picker"))
-+                        try variant.press()
-+                    } else { try keyPresser.return() }
++        var phase = BBCNativeReactionFailure.preparation
++        do {
++    
++            let startTime = Date()
++            defer { log.debug("setReaction took \(startTime.timeIntervalSinceNow * -1000)ms") }
++    
++            try prepareForAutomation()
++            defer { finishedAutomation() }
++    
++            phase = .selection
++            try withMessageCell(threadID: threadID, messageCell: messageCell) {
++                if let directAction = try directReactionAction(messageCell: $0, reaction: reaction) {
++                    phase = .directAction
++                    try directAction()
++                    return
                  }
-                 return
-             }
-@@ -818,16 +850,9 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
-                 return buttons[idx]
-             }()
- 
+-                return
+-            }
+-
+-            try openReactionPicker(messageCell: $0)
+-
+-            let btn = try {
+-                if isSequoiaOrUp {
+-                    return try elements.tapbackPickerCollectionView.children()
+-                        .first {
+-                            // standard: "ha", "thumbsUp", etc. custom: emoji string
+-                            let identifier = try? $0.identifier()
+-                            return identifier == reaction.idOrEmoji
++    
++                if case let .custom(emoji) = reaction, on {
++                    phase = .search
++                    let baseEmoji = String(emoji).withoutSkinToneModifiers.first ?? emoji
++                    let search = try CharacterPickerSearch(finding: baseEmoji)
++                    phase = .menu
++                    try openCustomEmojiReactionPicker(messageCell: $0)
++                    phase = .picker
++                    let picker = try retry(withTimeout: 1.5, interval: 0.05) { try elements.characterPickerPopover }
++                    do {
++                        let searchField = try elements.characterPickerSearchField
++                        try searchField.value(assign: search.query)
++                        phase = .choice
++                        let choice = try retry(withTimeout: 2, interval: 0.1) {
++                            try picker.recursiveChildren().first { element in
++                                let value = try? element.value()
++                                let glyph = value as? String ?? (value as? NSAttributedString)?.string
++                                let matches = glyph == String(emoji) || (try? element.identifier()) == String(emoji)
++                                    || (try? element.title()) == String(emoji) || (try? element.localizedDescription()) == String(emoji)
++                                return matches && ((try? element.supportedActions().contains { $0.name.value == NSAccessibility.Action.press.rawValue }) == true)
++                            }.orThrow(BBCNativeReactionFailure.choice)
+                         }
+-                        .orThrow(ErrorMessage("Could not find \(on ? "react" : "unreact") button"))
+-                }
+-
+-                let idx = reaction.index!
+-                let buttons = try elements.reactButtons
+-                guard buttons.count > idx else {
+-                    throw ErrorMessage("reactButtons count=\(buttons.count)")
++                        phase = .apply
++                        // A targeted AX press cannot accidentally send a personal draft.
++                        try choice.press()
++                        return
++                    } catch { try? picker.cancel(); throw error }
+                 }
+-
+-                return buttons[idx]
+-            }()
+-
 -            try retry(withTimeout: 1.2, interval: 0.1) {
 -                let isSelected = try btn.isSelected()
 -                if isSelected != on {
@@ -417,16 +509,42 @@ index bb6ae980..a625ccc6 100644
 -                    log.debug("Reaction: \(Result { try btn.localizedDescription() }) \(Result { try btn.isSelected() })")
 -                    guard try btn.isSelected() == on else {
 -                        throw ErrorMessage("Could not react")
--                    }
++    
++                phase = .picker
++                try openReactionPicker(messageCell: $0)
++    
++                let btn = try {
++                    if isSequoiaOrUp {
++                        return try elements.tapbackPickerCollectionView.children()
++                            .first {
++                                // standard: "ha", "thumbsUp", etc. custom: emoji string
++                                let identifier = try? $0.identifier()
++                                return identifier == reaction.idOrEmoji
++                            }
++                            .orThrow(ErrorMessage("Could not find \(on ? "react" : "unreact") button"))
+                     }
 -                }
--            }
-+            // One press maximum. BBC confirms the exact desired state in chat.db.
-+            // A delayed UI result must never cause a second toggle.
-+            if try btn.isSelected() != on { try btn.press() }
-         }
++    
++                    let idx = reaction.index!
++                    let buttons = try elements.reactButtons
++                    guard buttons.count > idx else {
++                        throw ErrorMessage("reactButtons count=\(buttons.count)")
++                    }
++    
++                    return buttons[idx]
++                }()
++    
++                // One press maximum. BBC confirms the exact desired state in chat.db.
++                // A delayed UI result must never cause a second toggle.
++                phase = .apply
++                if try btn.isSelected() != on { try btn.press() }
+             }
+-        }
++        } catch { throw phase }
      }
  
-@@ -994,6 +1019,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+     func undoSend(threadID: String, messageCell: MessageCell) throws {
+@@ -994,6 +1013,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
       3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
       4. threadCell.press() action hack                                       (unreliable)
       */
@@ -451,7 +569,7 @@ index bb6ae980..a625ccc6 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1124,142 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1118,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -532,9 +650,12 @@ index bb6ae980..a625ccc6 100644
 +            guard (try? elements.replyTranscriptView) == nil else { throw BBCNativeReplyFailure.replyTranscript }
 +            let field = try elements.messageBodyField
 +            guard try messageFieldValue(field).isEmpty else { throw BBCNativeReplyFailure.existingDraft }
++            let selectedRow = elements.selectedThreadCell
++            let selectedTitle = try elements.mainWindow.title()
 +            try assignToMessageField(field, text: url)
 +            guard try messageFieldValue(field) == url else { throw BBCNativeReplyFailure.verification }
-+            try assertSelectedThread(threadID: threadID)
++            guard selectedRow != nil, elements.selectedThreadCell == selectedRow,
++                  try elements.mainWindow.title() == selectedTitle else { throw BBCNativeReplyFailure.selection }
 +            focusMessageField(field)
 +            try keyPresser.return()
 +        }
@@ -594,7 +715,7 @@ index bb6ae980..a625ccc6 100644
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1291,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1288,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -610,7 +731,7 @@ index bb6ae980..a625ccc6 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1769,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1766,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
@@ -621,7 +742,7 @@ index bb6ae980..a625ccc6 100644
  
      deinit {
 diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
-index 24ae4ff3..eedb128d 100644
+index 24ae4ff3..d89a7139 100644
 --- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
 +++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
 @@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
@@ -633,10 +754,12 @@ index 24ae4ff3..eedb128d 100644
          state.database = db
          return db
      }
-@@ -63,6 +63,58 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
+@@ -63,6 +63,60 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
  ///
  /// `IMessageHost` owns singleton process state, so callers should create only one
  /// PlatformAPI instance per process and share it across wrapper surfaces.
++public enum BBCNativeReactionFailure: String, Error { case resolution, preparation, selection, directAction, search, menu, picker, choice, apply }
++
 +public enum BBCNativeReplyFailure: String, Error { case resolution, preparation, editorUnavailable, existingDraft, selection, replyAction, replyTranscript, replySelection, replyDraft, assignment, verification, send }
 +
 +public enum BBCNativeReadFailure: String, Error { case controller, resolution, preparation, selection, focus, transcript, cell, markAction }
@@ -692,7 +815,7 @@ index 24ae4ff3..eedb128d 100644
  public final class PlatformAPI {
      private static let activeInstance = Protected<ObjectIdentifier?>()
  
-@@ -384,6 +436,46 @@ public final class PlatformAPI {
+@@ -384,6 +438,48 @@ public final class PlatformAPI {
          try await withMessagesController { try $0.undoSend(threadID: threadID, messageID: messageID) }
      }
  
@@ -701,7 +824,9 @@ index 24ae4ff3..eedb128d 100644
 +    public func bbcSetReactionOnce(threadID: String, messageID: String, reaction: String, on: Bool) async throws {
 +        try await withMessageSendLock {
 +            try await withMessagesController { controller in
-+                try controller.setReaction(threadID: threadID, messageID: messageID, reactionName: reaction, on: on)
++                do { try controller.setReaction(threadID: threadID, messageID: messageID, reactionName: reaction, on: on) }
++                catch let failure as BBCNativeReactionFailure { throw failure }
++                catch { throw BBCNativeReactionFailure.resolution }
 +            }
 +        }
 +    }
