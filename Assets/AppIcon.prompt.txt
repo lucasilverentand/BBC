@@ -1,5 +1,17 @@
-Generated with the built-in image-generation tool, then resized and packaged
-into standard macOS icon sizes. No external image API or credentials were used.
+Artwork generated with the built-in image-generation tool from the previous BBC icon.
+Source: AppIcon.icon/Assets/Artwork.png (1024px, full-bleed square).
 
 Final edit prompt:
-Edit this Blue Bubble Club Mac app icon. Keep the lovely sky-blue rounded-square tile, soft white clouds and overall palette and composition. Change the central speech bubble so it looks like an actual Apple iMessage chat bubble: a WIDE HORIZONTAL ROUNDED RECTANGLE, significantly wider than tall, with the characteristic small gently curved pointed tail at the LOWER LEFT attached naturally to the bottom edge. A flat front face with modest soft dimensional edge and restrained highlight. It must immediately read as the familiar iMessage message bubble silhouette, NOT a round orb, balloon, circle, oval or droplet. Use saturated Apple Messages blue. Keep it centered, comfortably above and nestled into the clouds, with the entire tail visible. Do not add text, dots, symbols or logos. Clean production-ready macOS app icon with transparent pixels outside the rounded-square tile and no stray pixels outside the tile.
+Preserve the glossy blue wide iMessage speech bubble, curved lower-left tail,
+blue sky and white clouds. Remove the old rounded tile boundary, margins,
+border, outer shadow and transparency. Extend the scene seamlessly into all
+four square corners and every outer edge. Keep the composition and colors.
+No text, new symbols or painted icon frame. Apple applies the native mask,
+optical inset, edge treatment and shadow during compilation.
+
+Build with: bash script/prepare_icon.sh
+Apple Icon Composer source: AppIcon.icon/icon.json
+Compiled app resources: build/AppIcon/AppIcon.icns and Assets.car.
+AppIcon.icns is a fallback export; AppIcon.png previews its native 256px size.
+The compiled asset catalog includes the larger renditions through 1024px.
+Reference: https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer
