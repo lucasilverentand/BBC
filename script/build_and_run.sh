@@ -23,7 +23,8 @@ for RESOURCE in BBCMessagesActions_BBCMessagesActions FluidAudio_FluidAudio; do
 done
 cp -R "$ROOT/LICENSES" "$BUNDLE/Contents/Resources/"
 cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$BUNDLE/Contents/Resources/"
-cp "$ROOT/Assets/AppIcon.icns" "$BUNDLE/Contents/Resources/AppIcon.icns"
+bash "$ROOT/script/prepare_icon.sh"
+cp "$ROOT/build/AppIcon/AppIcon.icns" "$ROOT/build/AppIcon/Assets.car" "$BUNDLE/Contents/Resources/"
 cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -32,6 +33,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>club.bluebubble.app</string>
 <key>CFBundleName</key><string>Blue Bubble Club</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleIconName</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>
