@@ -26,11 +26,12 @@ import BBCClient
             switch method {
             case "status":
                 _ = try db.maximumRowID()
-                var methods = ["messages.after", "messages.status"]
+                var methods = ["messages.after", "messages.status", "media.download"]
                 if NativeMessagesStartup.automationStatus() == noErr { methods.append("send") }
                 result = .object(["version": .string("bbc-1"), "methods": .array(methods.map(BBCJSONValue.string))])
             case "messages.after": result = try db.page(parameters)
             case "messages.status": result = try db.messageStatus(parameters)
+            case "media.download": result = try db.download(parameters)
             case "send": result = try await send(parameters, database: db)
             default: throw ActionFailure.invalid
             }
@@ -52,8 +53,12 @@ import BBCClient
               p["allow_sms_fallback"]?.bool != true,
               let to = p["to"]?.string, to.utf8.count <= 254,
               to.range(of: #"^(\+[1-9][0-9]{6,14}|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)$"#, options: .regularExpression) != nil,
-              let text = p["text"]?.string, !text.isEmpty, text.utf8.count <= 64000,
-              !text.utf8.contains(0), !to.utf8.contains(0) else { throw ActionFailure.invalid }
+              !to.utf8.contains(0) else { throw ActionFailure.invalid }
+        let text = p["text"]?.string
+        let media = try p["media_id"]?.string.map { try MediaStore().resolve($0) }
+        guard (text == nil) != (media == nil) else { throw ActionFailure.invalid }
+        if let text { guard !text.isEmpty, text.utf8.count <= 64000, !text.utf8.contains(0) else { throw ActionFailure.invalid } }
+        let content = media.map { "(POSIX file " + literal($0.1.path) + ")" } ?? literal(text!)
         let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let lock = open(directory.appendingPathComponent("automation.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
@@ -67,7 +72,7 @@ import BBCClient
         tell application id "com.apple.MobileSMS"
           set account to first service whose service type is iMessage
           set recipient to buddy \(literal(to)) of account
-          send \(literal(text)) to recipient
+          send \(content) to recipient
         end tell
         """
         guard let script = NSAppleScript(source: source) else { throw ActionFailure.invalid }
@@ -76,14 +81,21 @@ import BBCClient
         guard error == nil else { throw ActionFailure.uncertain }
         let deadline = Date().addingTimeInterval(8)
         repeat {
-            let result = try database.rows("""
-                SELECT m.guid,c.guid FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID
-                JOIN chat c ON c.ROWID=j.chat_id WHERE m.ROWID>CAST(?1 AS INTEGER)
-                AND m.service='iMessage' AND m.is_from_me=1 AND m.text=?2 AND c.chat_identifier=?3
-                AND m.is_sent=1 AND COALESCE(m.error,0)=0 LIMIT 2
-                """, [String(before), text, to])
-            if result.count == 1 { return .object(["ok": .bool(true), "guid": .string(result[0][0]), "chat_guid": .string(result[0][1]), "confirmation": .string("local-database")]) }
-            if result.count > 1 { throw ActionFailure.uncertain }
+            if let media {
+                if let sent = try database.confirmedMedia(to: to, upload: media.0, after: before) {
+                    return .object(["ok": .bool(true), "guid": .string(sent.0), "chat_guid": .string(sent.1),
+                                    "media_id": .string(media.0.id.uuidString), "confirmation": .string("local-database")])
+                }
+            } else {
+                let result = try database.rows("""
+                    SELECT m.guid,c.guid FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID
+                    JOIN chat c ON c.ROWID=j.chat_id WHERE m.ROWID>CAST(?1 AS INTEGER)
+                    AND m.service='iMessage' AND m.is_from_me=1 AND m.text=?2 AND c.chat_identifier=?3
+                    AND m.is_sent=1 AND COALESCE(m.error,0)=0 LIMIT 2
+                    """, [String(before), text!, to])
+                if result.count == 1 { return .object(["ok": .bool(true), "guid": .string(result[0][0]), "chat_guid": .string(result[0][1]), "confirmation": .string("local-database")]) }
+                if result.count > 1 { throw ActionFailure.uncertain }
+            }
             try await Task.sleep(for: .milliseconds(100))
         } while Date() < deadline
         throw ActionFailure.uncertain
@@ -95,11 +107,16 @@ extension MessagesDatabase {
         let after = p["since_rowid"]?.numberValue ?? 0, limit = p["limit"]?.numberValue ?? 50
         guard after.isFinite, after >= 0, after < 9_007_199_254_740_991, after.rounded() == after,
               limit.isFinite, limit >= 1, limit <= 200, limit.rounded() == limit else { throw ActionFailure.invalid }
+        let emojiColumn = try optionalMessageColumn("associated_message_emoji")
+        let payloadColumn = try optionalMessageColumn("payload_data", fallback: "NULL")
+        let attachmentColumns = try rows("PRAGMA table_info(attachment)", []).map { $0[1] }
+        let transferName = attachmentColumns.contains("transfer_name") ? "COALESCE(a.transfer_name,'')" : "''"
+        let audioColumn = try optionalMessageColumn("is_audio_message", fallback: "0")
         let values = try rows("""
             SELECT m.ROWID,m.guid,c.guid,COALESCE(h.id,''),COALESCE(m.text,''),m.is_from_me,
                 m.date,COALESCE(m.service,''),COALESCE(m.thread_originator_guid,''),
                 COALESCE(m.associated_message_type,0),COALESCE(m.associated_message_guid,''),
-                COALESCE(hex(m.attributedBody),'')
+                COALESCE(hex(m.attributedBody),''), \(emojiColumn), CASE WHEN length(\(payloadColumn))<=256000 THEN hex(\(payloadColumn)) ELSE '' END, \(audioColumn)
             FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID
             JOIN chat c ON c.ROWID=j.chat_id LEFT JOIN handle h ON h.ROWID=m.handle_id
             WHERE m.ROWID>CAST(?1 AS INTEGER) ORDER BY m.ROWID,c.guid LIMIT ?2
@@ -110,16 +127,20 @@ extension MessagesDatabase {
             if text.isEmpty, row[11].count <= 4_000_000, let data = Data(hex: row[11]) { text = (try? AttributedBodyDecoder.plainText(from: data)) ?? "" }
             let reaction = Int(row[9]) ?? 0
             let root = normalizedGUID(row[8])
-            let attachments = p["attachments"]?.bool == true ? try rows("""
-                SELECT a.guid,COALESCE(a.mime_type,''),COALESCE(a.uti,''),COALESCE(a.total_bytes,0),COALESCE(a.is_sticker,0)
+            let attachmentRows = try rows("""
+                SELECT a.guid,COALESCE(a.mime_type,''),COALESCE(a.uti,''),COALESCE(a.total_bytes,0),COALESCE(a.is_sticker,0), \(transferName)
                 FROM attachment a JOIN message_attachment_join j ON j.attachment_id=a.ROWID JOIN message m ON m.ROWID=j.message_id WHERE m.guid=?1 ORDER BY a.ROWID LIMIT 20
-                """, [row[1]]).map { a in BBCJSONValue.object(["guid": .string(a[0]), "mime_type": .string(a[1]), "uti": .string(a[2]), "total_bytes": .number(Double(a[3]) ?? 0), "is_sticker": .bool(a[4] == "1")]) } : []
+                """, [row[1]])
+            let attachments = p["attachments"]?.bool == true ? attachmentRows.map { a in BBCJSONValue.object(["guid": .string(a[0]), "mime_type": .string(a[1]), "uti": .string(a[2]), "total_bytes": .number(Double(a[3]) ?? 0), "is_sticker": .bool(a[4] == "1")]) } : []
             return .object(["rowid": .number(Double(row[0]) ?? 0), "guid": .string(row[1]), "chat_guid": .string(row[2]),
                 "sender": .string(row[3]), "text": .string(String(text.prefix(64000))), "is_from_me": .bool(row[5] == "1"),
                 "is_group": .bool(participants.count != 1 || row[2].contains(";+;")), "participants": .array(participants.map(BBCJSONValue.string)),
                 "created_at": .string(ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 978307200 + (Double(row[6]) ?? 0) / 1_000_000_000))),
                 "service": .string(row[7]), "reply_to_guid": root.map(BBCJSONValue.string) ?? .null,
                 "thread_root_guid": .string(root ?? row[1]), "attachments": .array(attachments),
+                "links": .array(RichLinks.decode(Data(hex: row[13]), text: text, attachmentGUIDs: attachmentRows.filter { $0[5].lowercased().hasSuffix(".pluginpayloadattachment") }.map { $0[0] })),
+                "is_audio_message": .bool(row[14] == "1"),
+                "reaction_emoji": row[12].isEmpty ? .null : .string(row[12]),
                 "is_reaction": .bool((2000..<4000).contains(reaction)), "reaction_type": .number(Double(reaction)),
                 "is_reaction_add": .bool((2000..<3000).contains(reaction)), "reacted_to_guid": normalizedGUID(row[10]).map(BBCJSONValue.string) ?? .null])
         }

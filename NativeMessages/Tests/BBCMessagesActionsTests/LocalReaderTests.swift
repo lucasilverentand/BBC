@@ -28,8 +28,17 @@ final class LocalReaderTests: XCTestCase {
         INSERT INTO chat_message_join VALUES(1,1),(1,2),(1,3);
         INSERT INTO attachment VALUES('attachment','image/png','public.png',42,0);
         INSERT INTO message_attachment_join VALUES(2,1);
+        ALTER TABLE message ADD COLUMN associated_message_emoji TEXT;
+        ALTER TABLE message ADD COLUMN payload_data BLOB;
+        ALTER TABLE message ADD COLUMN is_audio_message INTEGER;
+        ALTER TABLE attachment ADD COLUMN transfer_name TEXT;
+        UPDATE message SET associated_message_type=2006,associated_message_emoji='🎉' WHERE ROWID=3;
+        UPDATE attachment SET transfer_name='preview.pluginpayloadattachment';
         """
         XCTAssertEqual(sqlite3_exec(connection, setup, nil, nil, nil), SQLITE_OK)
+        let payload = try PropertyListSerialization.data(fromPropertyList: ["richLinkMetadata": ["URL": ["NS.relative": "https://example.test"], "title": "Preview", "image": ["richLinkImageAttachmentSubstituteIndex": 0]]], format: .binary, options: 0)
+        let hex = payload.map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(sqlite3_exec(connection, "UPDATE message SET payload_data=X'\(hex)' WHERE ROWID=2", nil, nil, nil), SQLITE_OK)
         let database = try MessagesDatabase(url: url)
         let first = try database.page(["limit": .number(2), "attachments": .bool(true)])
         guard case .array(let rows) = first.object?["messages"] else { return XCTFail("Expected messages") }
@@ -40,10 +49,14 @@ final class LocalReaderTests: XCTestCase {
         XCTAssertEqual(rows[1].object?["is_group"]?.bool, false)
         guard case .array(let attachments) = rows[1].object?["attachments"] else { return XCTFail("Expected attachment metadata") }
         XCTAssertEqual(attachments[0].object?["guid"]?.string, "attachment")
+        guard case .array(let links) = rows[1].object?["links"] else { return XCTFail("Expected links") }
+        XCTAssertEqual(links.first?.object?["title"]?.string, "Preview")
+        XCTAssertEqual(links.first?.object?["image_attachment_guid"]?.string, "attachment")
         let second = try database.page(["since_rowid": .number(2)])
         guard case .array(let events) = second.object?["messages"] else { return XCTFail("Expected reaction") }
         XCTAssertEqual(events.count, 1); XCTAssertEqual(events[0].object?["reacted_to_guid"]?.string, reply)
         XCTAssertEqual(events[0].object?["is_reaction"]?.bool, true)
+        XCTAssertEqual(events[0].object?["reaction_emoji"]?.string, "🎉")
         XCTAssertThrowsError(try database.page(["since_rowid": .number(-1)]))
         XCTAssertThrowsError(try database.page(["limit": .number(201)]))
     }

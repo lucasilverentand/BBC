@@ -9,10 +9,13 @@ Every mutation requires an `Idempotency-Key` header containing a UUID chosen and
 | Route | Body / result |
 | --- | --- |
 | `GET /v1/status` | Observed permissions and available methods |
-| `POST /v1/messages` | `to`, `text`; always iMessage, SMS fallback disabled |
+| `POST /v1/messages` | `to`, either `text` or uploaded `media_id`; always iMessage, SMS fallback disabled |
 | `POST /v1/messages/after` | `since_rowid`, `limit` (1–200); incremental messages and `next_rowid` |
 | `POST /v1/messages/status` | `chat_guid`, `message_guid`; observed local sent/delivered/read flags |
 | `POST /v1/replies` | `chat_guid`, `message_guid`, `text`, `read_guids` |
+| `POST /v1/links` | `chat_guid`, `message_guid`, `url`, `read_guids` |
+| `POST /v1/media/upload` | Raw bytes, `X-BBC-Filename` header; returns `media_id` |
+| `POST /v1/media/download` | `chat_guid`, `message_guid`, `attachment_guid`, optional `offset`, `length` |
 | `POST /v1/tapbacks` | `chat_guid`, `message_guid`, `reaction`, optional `remove` |
 | `POST /v1/read` | `chat_guid`, `message_guid`, `read_guids` |
 | `POST /v1/read/status` | Same exact target and `read_guids`; observation only |
@@ -22,7 +25,7 @@ Every mutation requires an `Idempotency-Key` header containing a UUID chosen and
 | `POST /v1/media/transcribe` | Same attachment target; needs staged local models |
 | `GET /v1/operations/<uuid>` | Receipt for that API key and operation UUID |
 
-Status, message pages/status, read status and media preparation do not require an idempotency key. Requests accept at most 64 KB; responses are bounded at 2 MB. HTTP connections serve one request and close. The listener accepts at most 32 simultaneous connections.
+Status, message pages/status, read status, uploads, downloads and media preparation do not require an idempotency key. JSON requests accept at most 64 KB; raw uploads accept 32 MiB; responses are bounded at 2 MB. HTTP connections serve one request and close. The listener accepts at most eight simultaneous connections.
 
 ## Sending
 
@@ -36,6 +39,27 @@ curl http://127.0.0.1:7861/v1/messages \
   -d '{"to":"person@example.com","text":"Hello from Blue Bubble Club"}'
 ```
 
+## Photos, videos and audio
+
+Upload original bytes, then send the returned opaque ID:
+
+```sh
+curl http://127.0.0.1:7861/v1/media/upload \
+  -H "Authorization: Bearer $BBC_API_KEY" \
+  -H 'X-BBC-Filename: photo.jpg' \
+  -H 'Content-Type: application/octet-stream' --data-binary @photo.jpg
+```
+
+Send `{"to":"person@example.com","media_id":"<returned UUID>"}` to `/v1/messages` with a new operation UUID. Each send accepts one upload or text. Audio is sent as a file attachment; BBC does not label it as a recorded voice note. Supported uploads: JPEG, PNG, GIF, HEIC/HEIF, WebP, TIFF; MOV, MP4/M4V; M4A, MP3, CAF, WAV, AIFF and AAC. BBC validates the local file before accepting it. Uploads expire after 24 hours, with a 512 MiB local quota; expired files are removed on the next upload. Successful receipts confirm an exact new sent attachment in the local database, not recipient delivery.
+
+Request message pages with `attachments: true` to receive opaque attachment GUIDs, MIME types and byte counts; `is_audio_message` identifies native audio messages. `/v1/media/download` returns original bytes as `data_base64`, with `offset`, `next_offset`, `total_bytes` and `complete`. Request successive offsets until complete. Each chunk is at most 768 KiB; each attachment is at most 32 MiB. Downloads require the exact direct-chat/message/attachment tuple and a local file already available in Messages. Paths and remote download URLs are never accepted. Both sent and received attachments can be downloaded.
+
+## Rich links
+
+Send `{"chat_guid":"…","message_guid":"…","url":"https://example.com","read_guids":["…"]}` to `/v1/links` with an operation UUID. The anchor must be a message in the intended direct chat, and `read_guids` must cover its current unread messages. BBC uses the native composer once, preserves existing drafts, and rejects an open reply composer. Messages generates the preview; `preview: "managed-by-messages"` does not guarantee the site supplies a card or the recipient sees one. Plain URL text can also be sent through `/v1/messages`.
+
+Message pages include `links`: the URL and, when present in Apple’s rich-link payload, title, summary, site name and preview image/icon attachment GUIDs. `preview: false` means only a URL was detected in text. Metadata parsing makes no network requests. Download preview images through the attachment endpoint.
+
 ## Threading
 
 A message page preserves `guid`, `chat_guid`, `reply_to_guid` and `thread_root_guid` separately. Apple's native thread originator identifies the reply root; it does not always expose an immediate parent reply. Top-level messages use their own GUID as `thread_root_guid`. Do not infer a thread from the latest message, matching text or another conversation with the same person.
@@ -44,7 +68,7 @@ Reply with the exact message GUID and chat GUID. The native adapter resolves and
 
 ## Tapbacks and read state
 
-Tapback names are `love`, `like`, `dislike`, `laugh`, `emphasis` and `question`. The target is an exact UUID message in a verified direct iMessage chat. Setting an already present reaction is a no-op; the helper never repeats a button press to recover missing confirmation.
+Tapbacks accept `love`, `like`, `dislike`, `laugh`, `emphasis`, `question`, or a single emoji such as `🎉` or `👩‍💻`. Set `remove: true` to remove the exact reaction. Message pages expose custom emoji as `reaction_emoji` alongside native add/removal types. Picker availability depends on the Mac’s emoji support; confirmation checks the exact emoji, including modifiers. The target is an exact UUID message in a verified direct iMessage chat. Setting an already present reaction is a no-op; the helper never repeats a button press to recover missing confirmation.
 
 Read opens one verified message in its owned Messages process, then observes the local database. Apple may mark the conversation read as a side effect. A local read confirmation is not proof that the sender saw Apple's Read receipt. `messages.status` reports only the database flags the Mac actually observed; unknown remote visibility must stay unknown.
 
