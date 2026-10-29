@@ -107,9 +107,9 @@ extension MessagesDatabase {
         guard let chat = p["chat_guid"]?.string, let message = p["message_guid"]?.string,
               let attachment = p["attachment_guid"]?.string, !attachment.isEmpty, attachment.utf8.count <= 256 else { throw ActionFailure.invalid }
         try verify(chat: chat, message: message)
-        let offset = p["offset"]?.numberValue ?? 0, length = p["length"]?.numberValue ?? 786432
+        let offset = p["offset"]?.numberValue ?? 0, length = p["length"]?.numberValue ?? 524288
         guard offset.isFinite, offset >= 0, offset <= Double(MediaStore.maximumBytes), offset.rounded() == offset,
-              length.isFinite, length >= 1, length <= 786432, length.rounded() == length else { throw ActionFailure.invalid }
+              length.isFinite, length >= 1, length <= 524288, length.rounded() == length else { throw ActionFailure.invalid }
         let values = try rows("""
             SELECT a.filename,COALESCE(a.mime_type,''),COALESCE(a.total_bytes,0)
             FROM attachment a JOIN message_attachment_join ma ON ma.attachment_id=a.ROWID

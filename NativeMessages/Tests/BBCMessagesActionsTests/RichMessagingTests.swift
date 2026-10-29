@@ -83,7 +83,7 @@ final class RichMessagingTests: XCTestCase {
         XCTAssertEqual(first.object?["next_offset"]?.numberValue, 3); XCTAssertEqual(first.object?["complete"]?.bool, false)
         let last = try database.download(params.merging(["offset": .number(3)]) { _, new in new }, home: home)
         XCTAssertEqual(last.object?["data_base64"]?.string, Data([3, 4, 5]).base64EncodedString()); XCTAssertEqual(last.object?["complete"]?.bool, true)
-        let invalidRequests: [[String: BBCJSONValue]] = [["attachment_guid": .string("other")], ["chat_guid": .string("any;-;other@example.test")], ["offset": .number(7)], ["length": .number(786433)]]
+        let invalidRequests: [[String: BBCJSONValue]] = [["attachment_guid": .string("other")], ["chat_guid": .string("any;-;other@example.test")], ["offset": .number(7)], ["length": .number(524289)]]
         for invalid in invalidRequests {
             XCTAssertThrowsError(try database.download(params.merging(invalid) { _, new in new }, home: home))
         }
@@ -93,6 +93,12 @@ final class RichMessagingTests: XCTestCase {
         XCTAssertEqual(try database.confirmedMedia(to: "fixture@example.test", upload: upload, after: 0)?.0, guid)
         XCTAssertNil(try database.confirmedMedia(to: "other@example.test", upload: upload, after: 0))
         XCTAssertNil(try database.confirmedMedia(to: "fixture@example.test", upload: upload, after: 1))
+        // JSONEncoder may escape every slash in base64. Even worst-case binary
+        // must fit both the worker and HTTP 2 MB response bounds.
+        try Data(repeating: 255, count: 524288).write(to: file)
+        XCTAssertEqual(sqlite3_exec(connection, "UPDATE attachment SET total_bytes=524288", nil, nil, nil), SQLITE_OK)
+        let worst = try database.download(params.merging(["length": .number(524288)]) { _, new in new }, home: home)
+        XCTAssertLessThan(try JSONEncoder().encode(worst).count, 2_000_000)
         try FileManager.default.removeItem(at: file)
         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: dbURL)
         XCTAssertThrowsError(try database.download(params, home: home))
