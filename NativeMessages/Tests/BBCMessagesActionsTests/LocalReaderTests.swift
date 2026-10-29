@@ -59,5 +59,19 @@ final class LocalReaderTests: XCTestCase {
         XCTAssertEqual(events[0].object?["reaction_emoji"]?.string, "🎉")
         XCTAssertThrowsError(try database.page(["since_rowid": .number(-1)]))
         XCTAssertThrowsError(try database.page(["limit": .number(201)]))
+        XCTAssertEqual(sqlite3_exec(connection, """
+            INSERT INTO chat VALUES('any;-;other@example.test','other@example.test');
+            INSERT INTO chat_handle_join VALUES(2,1);
+            INSERT INTO message(guid,text,handle_id,is_from_me,date,service) VALUES('other','unrelated',1,0,4,'iMessage');
+            INSERT INTO chat_message_join VALUES(2,last_insert_rowid());
+            """, nil, nil, nil), SQLITE_OK)
+        let scoped = try database.page(["chat_guid": .string("any;-;fixture@example.test")])
+        guard case .array(let selected) = scoped.object?["messages"] else { return XCTFail("Expected scoped messages") }
+        XCTAssertEqual(selected.count, 3)
+        XCTAssertTrue(selected.allSatisfy { $0.object?["chat_guid"]?.string == "any;-;fixture@example.test" })
+        XCTAssertEqual(scoped.object?["next_rowid"]?.numberValue, 3)
+        XCTAssertThrowsError(try database.page(["chat_guid": .string("")]))
+        XCTAssertThrowsError(try database.page(["chat_guid": .number(1)]))
+
     }
 }

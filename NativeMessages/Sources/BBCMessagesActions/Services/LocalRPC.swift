@@ -45,9 +45,6 @@ import BBCClient
     private static func emit(_ value: BBCJSONValue) {
         if let data = try? JSONEncoder().encode(value) { try? FileHandle.standardOutput.write(contentsOf: data + Data([10])) }
     }
-    private static func literal(_ value: String) -> String {
-        "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\r", with: "\\r").replacingOccurrences(of: "\n", with: "\\n") + "\""
-    }
     private static func send(_ p: [String: BBCJSONValue], database: MessagesDatabase) async throws -> BBCJSONValue {
         guard getuid() != 0, getuid() == geteuid(), p["service"]?.string == "imessage",
               p["allow_sms_fallback"]?.bool != true,
@@ -58,7 +55,6 @@ import BBCClient
         let media = try p["media_id"]?.string.map { try MediaStore().resolve($0) }
         guard (text == nil) != (media == nil) else { throw ActionFailure.invalid }
         if let text { guard !text.isEmpty, text.utf8.count <= 64000, !text.utf8.contains(0) else { throw ActionFailure.invalid } }
-        let content = media.map { "(POSIX file " + literal($0.1.path) + ")" } ?? literal(text!)
         let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let lock = open(directory.appendingPathComponent("automation.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
@@ -67,22 +63,24 @@ import BBCClient
         let pid = try await NativeMessagesStartup.ensureRunning()
         guard NativeMessagesStartup.automationStatus(pid: pid) == noErr else { throw ActionFailure.unavailable }
         let before = try database.maximumRowID()
-        // AppleScript values are escaped literals and service selection is explicit.
-        let source = """
-        tell application id "com.apple.MobileSMS"
-          set account to first service whose service type is iMessage
-          set recipient to buddy \(literal(to)) of account
-          send \(content) to recipient
-        end tell
-        """
-        guard let script = NSAppleScript(source: source) else { throw ActionFailure.invalid }
-        var error: NSDictionary?
-        _ = script.executeAndReturnError(&error)
-        guard error == nil else { throw ActionFailure.uncertain }
+        if let media {
+            let file = try MediaStore.stageHandoff(upload: media.0, source: media.1)
+            guard let script = NSAppleScript(source: MessageSendScript.file(to: to, file: file)) else { throw ActionFailure.invalid }
+            var error: NSDictionary?
+            _ = script.executeAndReturnError(&error)
+            guard error == nil else { throw ActionFailure.uncertain }
+        } else {
+            let source = MessageSendScript.text(to: to, text: text!)
+            guard let script = NSAppleScript(source: source) else { throw ActionFailure.invalid }
+            var error: NSDictionary?
+            _ = script.executeAndReturnError(&error)
+            guard error == nil else { throw ActionFailure.uncertain }
+        }
         let deadline = Date().addingTimeInterval(8)
         repeat {
             if let media {
                 if let sent = try database.confirmedMedia(to: to, upload: media.0, after: before) {
+                    if (try? database.handoffCopied(message: sent.0, upload: media.0)) == true { try? MediaStore.removeHandoff(upload: media.0) }
                     return .object(["ok": .bool(true), "guid": .string(sent.0), "chat_guid": .string(sent.1),
                                     "media_id": .string(media.0.id.uuidString), "confirmation": .string("local-database")])
                 }
@@ -107,6 +105,11 @@ extension MessagesDatabase {
         let after = p["since_rowid"]?.numberValue ?? 0, limit = p["limit"]?.numberValue ?? 50
         guard after.isFinite, after >= 0, after < 9_007_199_254_740_991, after.rounded() == after,
               limit.isFinite, limit >= 1, limit <= 200, limit.rounded() == limit else { throw ActionFailure.invalid }
+        let chat: String
+        if let value = p["chat_guid"] {
+            guard let selected = value.string, !selected.isEmpty, selected.utf8.count <= 512, !selected.utf8.contains(0) else { throw ActionFailure.invalid }
+            chat = selected
+        } else { chat = "" }
         let emojiColumn = try optionalMessageColumn("associated_message_emoji")
         let payloadColumn = try optionalMessageColumn("payload_data", fallback: "NULL")
         let attachmentColumns = try rows("PRAGMA table_info(attachment)", []).map { $0[1] }
@@ -119,8 +122,8 @@ extension MessagesDatabase {
                 COALESCE(hex(m.attributedBody),''), \(emojiColumn), CASE WHEN length(\(payloadColumn))<=256000 THEN hex(\(payloadColumn)) ELSE '' END, \(audioColumn)
             FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID
             JOIN chat c ON c.ROWID=j.chat_id LEFT JOIN handle h ON h.ROWID=m.handle_id
-            WHERE m.ROWID>CAST(?1 AS INTEGER) ORDER BY m.ROWID,c.guid LIMIT ?2
-            """, [String(Int64(after)), String(Int(limit))])
+            WHERE m.ROWID>CAST(?1 AS INTEGER) AND (?3='' OR c.guid=?3) ORDER BY m.ROWID,c.guid LIMIT ?2
+            """, [String(Int64(after)), String(Int(limit)), chat])
         let messages = try values.map { row -> BBCJSONValue in
             let participants = try rows("SELECT h.id FROM handle h JOIN chat_handle_join j ON j.handle_id=h.ROWID JOIN chat c ON c.ROWID=j.chat_id WHERE c.guid=?1 ORDER BY h.id", [row[2]]).compactMap(\.first)
             var text = row[4]
@@ -131,7 +134,7 @@ extension MessagesDatabase {
                 SELECT a.guid,COALESCE(a.mime_type,''),COALESCE(a.uti,''),COALESCE(a.total_bytes,0),COALESCE(a.is_sticker,0), \(transferName)
                 FROM attachment a JOIN message_attachment_join j ON j.attachment_id=a.ROWID JOIN message m ON m.ROWID=j.message_id WHERE m.guid=?1 ORDER BY a.ROWID LIMIT 20
                 """, [row[1]])
-            let attachments = p["attachments"]?.bool == true ? attachmentRows.map { a in BBCJSONValue.object(["guid": .string(a[0]), "mime_type": .string(a[1]), "uti": .string(a[2]), "total_bytes": .number(Double(a[3]) ?? 0), "is_sticker": .bool(a[4] == "1")]) } : []
+            let attachments = p["attachments"]?.bool == true ? attachmentRows.map { a in BBCJSONValue.object(["guid": .string(a[0]), "mime_type": .string(MediaMIME.resolve(a[1], uti: a[2])), "uti": .string(a[2]), "total_bytes": .number(Double(a[3]) ?? 0), "is_sticker": .bool(a[4] == "1")]) } : []
             return .object(["rowid": .number(Double(row[0]) ?? 0), "guid": .string(row[1]), "chat_guid": .string(row[2]),
                 "sender": .string(row[3]), "text": .string(String(text.prefix(64000))), "is_from_me": .bool(row[5] == "1"),
                 "is_group": .bool(participants.count != 1 || row[2].contains(";+;")), "participants": .array(participants.map(BBCJSONValue.string)),

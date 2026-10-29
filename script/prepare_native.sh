@@ -15,4 +15,4 @@ if git -C "$BBC_SOURCE" diff --quiet; then git -C "$BBC_SOURCE" apply "$BBC_ROOT
 # Reject any build-cache modification outside the exact reviewed patch.
 [[ "$(git -C "$BBC_SOURCE" diff)" == "$(cat "$BBC_ROOT/NativeMessages/beeper-bbc.patch")" ]]
 # Pin all transitive versions in BBC's dedicated lockfile.
-swift build --disable-automatic-resolution --package-path "$BBC_ROOT/NativeMessages" --product BlueBubbleClub -c debug
+swift build --jobs "${BBC_BUILD_JOBS:-2}" --disable-automatic-resolution --package-path "$BBC_ROOT/NativeMessages" --product BlueBubbleClub -c debug

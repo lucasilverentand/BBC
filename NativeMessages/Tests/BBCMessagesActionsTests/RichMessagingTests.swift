@@ -87,6 +87,11 @@ final class RichMessagingTests: XCTestCase {
         for invalid in invalidRequests {
             XCTAssertThrowsError(try database.download(params.merging(invalid) { _, new in new }, home: home))
         }
+        XCTAssertEqual(sqlite3_exec(connection, "ALTER TABLE attachment ADD COLUMN transfer_state INTEGER DEFAULT 5; ALTER TABLE attachment ADD COLUMN uti TEXT; UPDATE attachment SET total_bytes=7", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(try database.download(params, home: home).object?["total_bytes"]?.numberValue, 6)
+        XCTAssertEqual(sqlite3_exec(connection, "UPDATE attachment SET transfer_state=3", nil, nil, nil), SQLITE_OK)
+        XCTAssertThrowsError(try database.download(params, home: home))
+        XCTAssertEqual(sqlite3_exec(connection, "UPDATE attachment SET transfer_state=5", nil, nil, nil), SQLITE_OK)
         let upload = MediaStore.Upload(id: uploadID, ext: "png", mimeType: "image/png", bytes: 6, created: Date())
         XCTAssertNil(try database.confirmedMedia(to: "fixture@example.test", upload: upload, after: 0))
         XCTAssertEqual(sqlite3_exec(connection, "UPDATE message SET is_from_me=1", nil, nil, nil), SQLITE_OK)
@@ -153,6 +158,27 @@ final class RichMessagingTests: XCTestCase {
         XCTAssertEqual(writer.status, .completed)
         return try Data(contentsOf: file)
     }
+    func testPrivateHandoffIsBoundedReusableAndRejectsSymlinks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MediaStore(directory: root.appendingPathComponent("uploads"))
+        let original = try Self.png()
+        let upload = try await store.create(original, filename: "fixture.png")
+        let source = try store.resolve(upload.id.uuidString).1
+        let destination = root.appendingPathComponent("handoff")
+        let file = try MediaStore.stageHandoff(upload: upload, source: source, directory: destination)
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int, 0o600)
+        XCTAssertEqual(try MediaStore.stageHandoff(upload: upload, source: source, directory: destination), file)
+        try MediaStore.removeHandoff(upload: upload, directory: destination)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+        let link = root.appendingPathComponent("link.png")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: source)
+        XCTAssertThrowsError(try MediaStore.stageHandoff(upload: upload, source: link, directory: destination))
+        XCTAssertEqual(MediaMIME.resolve("", uti: "com.apple.coreaudio-format"), "audio/x-caf")
+    }
+
     func testUploadsAreOpaqueValidatedPrivateAndExpire() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -189,6 +189,14 @@ struct BBCMessagesActions {
                 let failure = NativeIndicatorFailure.resolve(error, phase: phase, attempted: attempted)
                 phase = failure.phase; attempted = failure.attempted
             }
+            if let reaction = error as? BBCNativeReactionFailure {
+                phase = "reaction_" + reaction.rawValue
+                attempted = [.directAction, .apply].contains(reaction)
+            }
+            if phase.hasPrefix("reaction_") { NativeMessagesObservation.record() }
+            if let controller = error as? BBCNativeControllerFailure {
+                phase = "controller_" + controller.rawValue; attempted = false
+            }
             if let reply = error as? BBCNativeReplyFailure {
                 phase = "reply_" + reply.rawValue
                 attempted = reply == .send
