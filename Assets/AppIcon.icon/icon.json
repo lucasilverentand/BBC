@@ -1,14 +1,36 @@
 {
   "fill": {
-    "solid": "srgb:0.1,0.55,1,1"
+    "linear-gradient": [
+      "srgb:0.12,0.52,1,1",
+      "srgb:0.4,0.8,1,1"
+    ]
   },
   "groups": [
     {
+      "name": "iMessage",
       "layers": [
         {
-          "image-name": "Artwork.png",
-          "name": "Blue bubble and clouds",
+          "image-name": "Message.png",
+          "name": "Apple message outline",
           "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.25
+      }
+    },
+    {
+      "name": "Clouds",
+      "layers": [
+        {
+          "image-name": "Clouds.png",
+          "name": "Clouds",
+          "glass": false
         }
       ],
       "shadow": {
@@ -16,8 +38,8 @@
         "opacity": 0
       },
       "translucency": {
-        "enabled": true,
-        "value": 0.15
+        "enabled": false,
+        "value": 0
       }
     }
   ],
