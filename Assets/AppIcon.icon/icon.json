@@ -11,7 +11,7 @@
       "layers": [
         {
           "image-name": "Message.png",
-          "name": "Apple message outline",
+          "name": "Apple white filled message",
           "glass": true
         }
       ],
