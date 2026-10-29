@@ -10,9 +10,9 @@ import AppKit
             throw Failure.symbolUnavailable
         }
         let canvas = NSRect(x: 0, y: 0, width: 1024, height: 1024)
-        let width: CGFloat = 700
+        let width: CGFloat = 740
         let height = width * symbol.size.height / symbol.size.width
-        let frame = NSRect(x: (1024 - width) / 2, y: (1024 - height) / 2 + 30, width: width, height: height)
+        let frame = NSRect(x: (1024 - width) / 2, y: (1024 - height) / 2 + 90, width: width, height: height)
         guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),

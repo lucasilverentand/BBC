@@ -1,8 +1,8 @@
 {
   "fill": {
     "linear-gradient": [
-      "srgb:0.12,0.52,1,1",
-      "srgb:0.4,0.8,1,1"
+      "srgb:0.05,0.36,0.9,1",
+      "srgb:0.24,0.68,1,1"
     ]
   },
   "groups": [
@@ -17,11 +17,11 @@
       ],
       "shadow": {
         "kind": "neutral",
-        "opacity": 0.35
+        "opacity": 0.65
       },
       "translucency": {
         "enabled": true,
-        "value": 0.5
+        "value": 0.4
       }
     },
     {
@@ -30,7 +30,19 @@
         {
           "image-name": "Clouds.png",
           "name": "Clouds",
-          "glass": false
+          "glass": false,
+          "position-specializations": [
+            {
+              "idiom": "square",
+              "value": {
+                "scale": 1,
+                "translation-in-points": [
+                  0,
+                  180
+                ]
+              }
+            }
+          ]
         }
       ],
       "shadow": {
