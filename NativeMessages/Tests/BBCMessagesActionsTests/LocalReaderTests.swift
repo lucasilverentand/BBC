@@ -31,7 +31,7 @@ final class LocalReaderTests: XCTestCase {
         """
         XCTAssertEqual(sqlite3_exec(connection, setup, nil, nil, nil), SQLITE_OK)
         let database = try MessagesDatabase(url: url)
-        let first = try database.page(["limit": .number(2)])
+        let first = try database.page(["limit": .number(2), "attachments": .bool(true)])
         guard case .array(let rows) = first.object?["messages"] else { return XCTFail("Expected messages") }
         XCTAssertEqual(rows.count, 2); XCTAssertEqual(first.object?["next_rowid"]?.numberValue, 2)
         XCTAssertEqual(rows[0].object?["thread_root_guid"]?.string, root)

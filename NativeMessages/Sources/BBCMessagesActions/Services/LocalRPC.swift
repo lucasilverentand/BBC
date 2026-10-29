@@ -110,10 +110,10 @@ extension MessagesDatabase {
             if text.isEmpty, row[11].count <= 4_000_000, let data = Data(hex: row[11]) { text = (try? AttributedBodyDecoder.plainText(from: data)) ?? "" }
             let reaction = Int(row[9]) ?? 0
             let root = normalizedGUID(row[8])
-            let attachments = try rows("""
+            let attachments = p["attachments"]?.bool == true ? try rows("""
                 SELECT a.guid,COALESCE(a.mime_type,''),COALESCE(a.uti,''),COALESCE(a.total_bytes,0),COALESCE(a.is_sticker,0)
                 FROM attachment a JOIN message_attachment_join j ON j.attachment_id=a.ROWID JOIN message m ON m.ROWID=j.message_id WHERE m.guid=?1 ORDER BY a.ROWID LIMIT 20
-                """, [row[1]]).map { a in BBCJSONValue.object(["guid": .string(a[0]), "mime_type": .string(a[1]), "uti": .string(a[2]), "total_bytes": .number(Double(a[3]) ?? 0), "is_sticker": .bool(a[4] == "1")]) }
+                """, [row[1]]).map { a in BBCJSONValue.object(["guid": .string(a[0]), "mime_type": .string(a[1]), "uti": .string(a[2]), "total_bytes": .number(Double(a[3]) ?? 0), "is_sticker": .bool(a[4] == "1")]) } : []
             return .object(["rowid": .number(Double(row[0]) ?? 0), "guid": .string(row[1]), "chat_guid": .string(row[2]),
                 "sender": .string(row[3]), "text": .string(String(text.prefix(64000))), "is_from_me": .bool(row[5] == "1"),
                 "is_group": .bool(participants.count != 1 || row[2].contains(";+;")), "participants": .array(participants.map(BBCJSONValue.string)),
