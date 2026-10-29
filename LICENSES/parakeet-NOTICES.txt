@@ -1,0 +1,18 @@
+Incoming audio uses NVIDIA Parakeet TDT 0.6B v3, converted to Core ML by
+Fluid Inference. The public model is distributed under CC BY 4.0:
+https://creativecommons.org/licenses/by/4.0/
+
+Pinned conversion and source model card:
+https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml/tree/7dd20fe6b1797d35f5e3307e8b1732d9a178edfe
+
+Seven selects the supplied Encoder_v2 int8 conversion, Preprocessor,
+Decoder, JointDecisionv3 and vocabulary without modifying their contents.
+Exact component sizes and SHA-256 hashes are retained in the bundled
+ParakeetModels.lock.json. Weights remain outside the application bundle.
+
+The FluidAudio Swift SDK is pinned to version 0.17.7, revision
+503b4bd1bbf7220882de39fe8ae6716aae4132da:
+https://github.com/FluidInference/FluidAudio/tree/v0.17.7
+Its Apache 2.0 license and fastcluster license accompany this notice.
+The optional NemoTextProcessing trait is disabled; no speech generation
+or remote transcription service is used by Seven's incoming-audio path.

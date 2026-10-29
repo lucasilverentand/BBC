@@ -1,0 +1,713 @@
+diff --git a/src/IMessage/Sources/IMessage/Defaults.swift b/src/IMessage/Sources/IMessage/Defaults.swift
+index 14b5d962..1e372ee8 100644
+--- a/src/IMessage/Sources/IMessage/Defaults.swift
++++ b/src/IMessage/Sources/IMessage/Defaults.swift
+@@ -99,12 +99,12 @@ enum DefaultsKeys {
+ enum Defaults {
+     // Suite name kept as "swift-server" to preserve users' existing prefs
+     // after the package rename — changing it would orphan their stored values.
+-    public static let imessage = UserDefaults(suiteName: "com.automattic.beeper.desktop.swift-server")!
++    public static let imessage = UserDefaults(suiteName: "club.bluebubble.messages-actions")!
+     private static let ncPrefs = UserDefaults(suiteName: "com.apple.ncprefs")
+ 
+     static func registerDefaults() {
+         var defaults: [String: Any] = [
+-            DefaultsKeys.windowCoordination: true,
++            DefaultsKeys.windowCoordination: false, // BBC is a separate-user satellite, not an eclipsed desktop client.
+ 
+             DefaultsKeys.watchThreadActivity: true,
+             DefaultsKeys.pollActivityStatus: true,
+@@ -159,7 +159,9 @@ enum Defaults {
+         imessage.register(defaults: defaults)
+     }
+ 
+-    static var shouldCoordinateWindow: Bool { Self.imessage.bool(forKey: DefaultsKeys.windowCoordination) }
++    // BBC reuses its runtime user's Messages app. Stored desktop-client
++    // preferences cannot enable eclipsing, hidden Spaces or app ownership.
++    static var shouldCoordinateWindow: Bool { false }
+ 
+     static func resetPrompts() {
+         // getUserDefaults(bundleID: messagesBundleID)?.set(true, forKey: "kHasSetupHashtagImages") // unknown
+diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift b/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
+index 936ae9fc..d3babc3a 100644
+--- a/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
++++ b/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
+@@ -270,29 +270,6 @@ final class MessagesAppElements {
+             }
+             let mainWindow = try retry(withTimeout: 5, interval: 0.2) { () throws -> Accessibility.Element in
+                 try getMainWindow().orThrow(ErrorMessage("Could not get main Messages window"))
+-            } onError: { attempt, _ in
+-                if attempt == 0 {
+-                    log.notice("mainWindow: using compose deep link to try to get main window")
+-                    try self.openDeepLink(MessagesDeepLink.compose.url())
+-                } else if attempt == 1 {
+-                    if self.isPromptVisibleInMessagesApp() {
+-                        log.notice("mainWindow: some prompts are visible, attempting to reset")
+-                        Defaults.resetPrompts()
+-                    }
+-                } else if attempt == 2 {
+-                    if self.isPromptVisibleInMessagesApp() {
+-                        log.error("mainWindow: some prompts are still visible, force terminating")
+-                        // regular terminate wont work since all window close buttons are disabled
+-                        self.runningApp.forceTerminate()
+-                        // this should invalidate the MessagesController
+-                    }
+-                } else if attempt > 3 {
+-                    do {
+-                        try self.dismissAnyPresentedSheet()
+-                    } catch {
+-                        log.error("couldn't try dismissing any presented sheet: \(error)")
+-                    }
+-                }
+             }
+             //            try? MessagesController.resizeWindowToMaxHeight(mainWindow)
+             // clearCachedElements()
+diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController+ResolveMessageCell.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController+ResolveMessageCell.swift
+index 1998f6d7..63aee563 100644
+--- a/src/IMessage/Sources/IMessage/Messages/MessagesController+ResolveMessageCell.swift
++++ b/src/IMessage/Sources/IMessage/Messages/MessagesController+ResolveMessageCell.swift
+@@ -29,7 +29,7 @@ func resolveMessageCellResolution(
+ 
+ extension MessagesController {
+     func resolveMessageCell(
+-        threadID _: String,
++        threadID: String,
+         messageGUID: String,
+         partIndex: Int?,
+         allowOverlay: Bool = true
+@@ -40,6 +40,7 @@ extension MessagesController {
+             throw ErrorMessage("Could not find message \(messageGUID)")
+         }
+ 
++        guard chatGUID.description == threadID else { throw ErrorMessage("BBC rejected a different message chat") }
+         let cellID: String? = isSonomaOrUp ? nil : message.balloonBundleID
+         let isReply: Bool = message.threadOriginatorGUID != nil
+         let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
+diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
+index bb6ae980..2aeffddb 100644
+--- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
++++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
+@@ -1,3 +1,4 @@
++import Darwin
+ import AccessibilityControl
+ import AppKit
+ import Carbon.HIToolbox.Events
+@@ -10,6 +11,23 @@ import IMessageCore
+ import PlatformSDK
+ import WindowControl
+ 
++// A focus notification may be delivered synchronously while the targeted URL opens.
++// Reusing an already selected chat additionally requires exact native identity;
++// a selected row or a matching display name alone is not sufficient.
++enum BBCThreadSelectionBoundary {
++    static func observedChange(_ change: Date?, since openingBegan: Date) -> Bool {
++        guard let change else { return false }
++        return change > openingBegan
++    }
++
++    static func mayReuseSelectedDirectChat(address: String, isGroup: Bool,
++                                          beforeTitle: String?, afterTitle: String?,
++                                          sameSelectedRow: Bool) -> Bool {
++        !isGroup && !address.isEmpty && !address.hasPrefix("urn:biz:") &&
++            beforeTitle == address && afterTitle == address && sameSelectedRow
++    }
++}
++
+ private let log = Logger(imessageLabel: "messages-controller")
+ private let lifecycleLog = Logger(imessageLabel: "lifecycle")
+ 
+@@ -101,18 +119,6 @@ final class MessagesController {
+         try? closeReplyTranscriptView(wait: false)
+     }
+ 
+-    private static func terminateApp(_ app: NSRunningApplication) throws {
+-        app.terminate()
+-        try retry(withTimeout: 2, interval: 0.1) {
+-            guard app.isTerminated else { throw ErrorMessage("App couldn't be terminated") }
+-        } onError: { attempt, _ in
+-            if attempt == 19 {
+-                log.debug("Force terminating app")
+-                app.forceTerminate()
+-            }
+-        }
+-    }
+-
+     @discardableResult
+     static func openDeepLink(
+         _ url: URL,
+@@ -121,7 +127,8 @@ final class MessagesController {
+         targeting app: NSRunningApplication? = nil
+     ) throws -> NSRunningApplication {
+         let shouldHide = hiding && Defaults.shouldCoordinateWindow
+-        if Preferences.useSecondaryMessagesInstance, let app {
++        if let app {
++            guard Self.isOwnUserProcess(app) else { throw ErrorMessage("BBC rejected a Messages process outside its macOS user") }
+             try MessagesInstanceTarget.sendDeepLink(url, to: app)
+             if activating {
+                 app.activate()
+@@ -183,7 +190,7 @@ final class MessagesController {
+     }
+ 
+     // ignores the service (SMS or iMessage) and matches contact identifiers since it's merged in the UI
+-    private func assertSelectedThread(threadID: String) throws {
++    private func assertSelectedThread(threadID: String, openingBegan: Date? = nil, verifiedSelection: (() -> Bool)? = nil) throws {
+         let hashedThreadID = Hasher.thread.tokenizeRemembering(pii: threadID)
+         guard Defaults.imessage.bool(forKey: DefaultsKeys.misfirePrevention) else {
+             log.debug("NOT ensuring selected thread, misfire prevention is off: \(hashedThreadID)")
+@@ -196,13 +203,17 @@ final class MessagesController {
+             log.debug("ensuring selected thread: \(hashedThreadID)")
+         }
+ 
++        // This predicate reads the current native title and selected row again;
++        // do not substitute a remembered chat GUID or an arbitrary selected cell.
++        if verifiedSelection?() == true { return }
++
+         func assertSelectedThreadViaLastChange(of date: Protected<Date?>, type: String, emoji: String) throws {
+             guard let lastChange = date.read() else {
+                 throw ErrorMessage("misfire prevention: \(type) hasn't changed at all")
+             }
+ 
+             let waitingTime = "\((Date().timeIntervalSince(beganEnsuringThreadSelection) * 1000).rounded())ms"
+-            guard lastChange > beganEnsuringThreadSelection else {
++            guard BBCThreadSelectionBoundary.observedChange(lastChange, since: beganEnsuringThreadSelection) else {
+                 throw ErrorMessage("misfire prevention: \(type) hasn't changed yet since we started (\(beganEnsuringThreadSelection.iso8601Formatted)) (waited \(waitingTime) so far)")
+             }
+ 
+@@ -210,7 +221,7 @@ final class MessagesController {
+         }
+ 
+         var attempt = 0
+-        let beganEnsuringThreadSelection = Date()
++        let beganEnsuringThreadSelection = openingBegan ?? Date()
+         var hasLoggedAboutStrategy = false
+ 
+         try retry(withTimeout: 1.2, interval: 0.05) {
+@@ -258,6 +269,16 @@ final class MessagesController {
+         }
+     }
+ 
++    private static func processUserID(_ app: NSRunningApplication) -> UInt32? {
++        var info = proc_bsdinfo()
++        let size = MemoryLayout<proc_bsdinfo>.size
++        guard proc_pidinfo(app.processIdentifier, PROC_PIDTBSDINFO, 0, &info, Int32(size)) == Int32(size) else { return nil }
++        return info.pbi_uid
++    }
++    private static func isOwnUserProcess(_ app: NSRunningApplication) -> Bool {
++        processUserID(app) == geteuid()
++    }
++
+     private func openThread(_ threadID: String) throws {
+         try? self.clearTypingStatus()
+         try openDeepLink(try MessagesDeepLink(threadID: threadID, body: nil).url())
+@@ -267,56 +288,46 @@ final class MessagesController {
+     init(reportErrorMessage: @escaping (_ txt: String) -> Void) throws {
+         self.reportErrorMessage = reportErrorMessage
+         guard Accessibility.isTrusted() else {
+-            throw ErrorMessage("Beeper does not have Accessibility permissions")
++            throw BBCNativeControllerFailure.accessibility
+         }
+ 
+-        windowCoordinator = try getBestWindowCoordinator()
++        windowCoordinator = try BBCNativeControllerFailure.at(.coordination) { try getBestWindowCoordinator() }
+ 
+-        let launchMessages = { [windowCoordinator] (withoutActivation: Bool) throws -> NSRunningApplication in
+-            // waiting reduces the likelihood that messages.app shows up visible (requiring us to restart it)
+-            if !windowCoordinator.canReuseExtantInstance && Defaults.shouldCoordinateWindow {
+-                Thread.sleep(forTimeInterval: 0.1)
++        let launchMessages = { () throws -> NSRunningApplication in
++            // A generic URL launch can select another logged-in user's Messages.
++            // Launch an explicit instance, verify ownership, then address its PID.
++            let ownApp = try BBCNativeControllerFailure.at(.launch) {
++                try MessagesInstanceTarget.launchSecondaryInstance(
++                    activating: false,
++                    hiding: false
++                )
+             }
+-            log.info("launching messages... (without activation? \(withoutActivation))")
+-            return try Self.openDeepLink(MessagesDeepLink.compose.url(), activating: !withoutActivation)
++            guard Self.isOwnUserProcess(ownApp) else { throw BBCNativeControllerFailure.ownership }
++            return ownApp
+         }
+ 
+-        if Preferences.useSecondaryMessagesInstance {
+-            log.info("launching secondary messages instance...")
+-            app = try MessagesInstanceTarget.launchSecondaryInstance(
+-                initialDeepLink: MessagesDeepLink.compose.url(),
+-                activating: false,
+-                hiding: false
+-            )
++        let messagesApps = NSRunningApplication.runningApplications(withBundleIdentifier: messagesBundleID).filter(Self.isOwnUserProcess)
++        guard messagesApps.count <= 1 else { throw BBCNativeControllerFailure.discovery }
++        if let existingApp = messagesApps.first {
++            app = existingApp
+         } else {
+-            var messagesApps = NSRunningApplication.runningApplications(withBundleIdentifier: messagesBundleID)
+-            if messagesApps.count > 1 { // if there's more than one instance of messages app something weird happened, terminate all to be safe
+-                log.info("found \(messagesApps.count) instances of messages.app, terminating all to be safe")
+-                messagesApps.forEach { try? Self.terminateApp($0) }
+-                messagesApps.removeAll()
+-            }
+-            if let existingApp = messagesApps.first {
+-                // if coordination is disabled, avoid unnecessarily terminating the app
+-                if windowCoordinator.canReuseExtantInstance || !Defaults.shouldCoordinateWindow {
+-                    log.info("reusing existing messages...")
+-                    app = existingApp
+-                } else {
+-                    log.info("terminating messages...")
+-                    try Self.terminateApp(existingApp)
+-                    // this is for markAsReadWithPressHack (monterey or lower)
+-                    // launch with activation because the hack doesn't work until the app is activated at least once
+-                    app = try launchMessages(!isVenturaOrUp)
+-                }
+-            } else {
+-                app = try launchMessages(false)
+-            }
++            app = try launchMessages()
+         }
+ 
+-        windowCoordinator.app = app
++        guard Self.isOwnUserProcess(app) else { throw BBCNativeControllerFailure.ownership }
++
++        if Defaults.shouldCoordinateWindow {
++            windowCoordinator.app = app
++        } else {
++            // Coordinator assignment hides the app even when coordination is off.
++            // Only the already verified BBC process may be unhidden, never activated.
++            guard BBCControllerWindowPolicy.mayUnhide(coordinating: false, effectiveUID: geteuid(), processUID: Self.processUserID(app)) else { throw BBCNativeControllerFailure.ownership }
++            app.unhide()
++        }
+ 
+         // without sleeping, appElement.observe applicationActivated/applicationDeactivated doesn't fire
+-        try app.waitForLaunch()
+         let selectedApp = app
++        try BBCNativeControllerFailure.at(.launch) { try selectedApp.waitForLaunch() }
+ 
+         elements = MessagesAppElements(runningApp: selectedApp, openDeepLink: { url in
+             try Self.openDeepLink(url, targeting: selectedApp)
+@@ -337,16 +348,10 @@ final class MessagesController {
+         lifecycleObserver = observer
+         setUpLifecycleConveyor(with: lifecycleObserver)
+ 
+-        guard isValid else {
+-            dispose() // since deinit isn't called when init throws
+-            throw ErrorMessage("""
+-Initialized MessagesController in an invalid state:
+-appTerminated=\(app.isTerminated)
+-mwFrameValid=\(Result { try elements.mainWindow.isFrameValid })
+-isMessagesAppResponsive=\(isMessagesAppResponsive)
+-""")
+-        }
+-        resetWindow()
++        guard !app.isTerminated else { dispose(); throw BBCNativeControllerFailure.launch }
++        guard (try? elements.mainWindow.isFrameValid) != nil else { dispose(); throw BBCNativeControllerFailure.window }
++        guard isMessagesAppResponsive else { dispose(); throw BBCNativeControllerFailure.responsiveness }
++        // Constructor discovery must not navigate, dismiss UI or change a draft.
+     }
+ 
+     func setUpLifecycleConveyor(with observer: LifecycleObserver) {
+@@ -449,6 +454,9 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+ 
+         if Defaults.shouldCoordinateWindow, let mainWindow = elements.getMainWindow() {
+             try windowCoordinator.makeAutomatable(mainWindow)
++        } else if !Defaults.shouldCoordinateWindow {
++            // Only the verified same-user Messages process; never activate Luca's desktop.
++            app.unhide()
+         }
+     }
+ 
+@@ -672,7 +680,7 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+         log.debug("reveal: 5/5 done, proceeding with grabbing the cell")
+     }
+ 
+-    private func withMessageCell(threadID: String, messageCell: MessageCell, action: (_ cell: Accessibility.Element) throws -> Void) throws {
++    private func withMessageCell(threadID: String, messageCell: MessageCell, readPhase: ((BBCNativeReadFailure) -> Void)? = nil, action: (_ cell: Accessibility.Element) throws -> Void) throws {
+         log.debug("withMessageCell (messageCell=\(messageCell))")
+ 
+         let url = try MessagesDeepLink.message(
+@@ -686,8 +694,21 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+             try? closeReplyTranscriptView(wait: false)
+         }
+ 
++        // Capture identity before opening: an already selected direct chat need not
++        // emit another focus notification. Names and group titles are ambiguous.
++        let address = try splitThreadID(threadID).orThrow(ErrorMessage("invalid threadID")).2
++        let selectedRow = elements.selectedThreadCell
++        let selectedTitle = try? elements.mainWindow.title()
++        let openingBegan = Date()
+         try withActivation(openBefore: url) {
+-            try assertSelectedThread(threadID: threadID)
++            readPhase?(.focus)
++            try assertSelectedThread(threadID: threadID, openingBegan: openingBegan, verifiedSelection: {
++                BBCThreadSelectionBoundary.mayReuseSelectedDirectChat(
++                    address: address, isGroup: threadIDIsForGroup(threadID),
++                    beforeTitle: selectedTitle, afterTitle: try? self.elements.mainWindow.title(),
++                    sameSelectedRow: selectedRow != nil && self.elements.selectedThreadCell == selectedRow
++                )
++            })
+ 
+             // we don't close transcript view here because when reacting, closing it will undo the reaction
+             // defer {
+@@ -696,9 +717,11 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+             //         closeReplyTranscriptView(wait: true)
+             //     }
+             // }
++            readPhase?(.transcript)
+             if messageCell.overlay {
+                 try waitUntilReplyTranscriptVisible()
+             }
++            readPhase?(.cell)
+             guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
+                 guard let cell = try messageCell.overlay
+                         ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
+@@ -818,16 +841,9 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+                 return buttons[idx]
+             }()
+ 
+-            try retry(withTimeout: 1.2, interval: 0.1) {
+-                let isSelected = try btn.isSelected()
+-                if isSelected != on {
+-                    try btn.press()
+-                    log.debug("Reaction: \(Result { try btn.localizedDescription() }) \(Result { try btn.isSelected() })")
+-                    guard try btn.isSelected() == on else {
+-                        throw ErrorMessage("Could not react")
+-                    }
+-                }
+-            }
++            // One press maximum. BBC confirms the exact desired state in chat.db.
++            // A delayed UI result must never cause a second toggle.
++            if try btn.isSelected() != on { try btn.press() }
+         }
+     }
+ 
+@@ -994,6 +1010,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+      3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
+      4. threadCell.press() action hack                                       (unreliable)
+      */
++    func bbcOpenReadThreadOnce(threadID: String, messageID: String) throws {
++        var phase = BBCNativeReadFailure.resolution
++        do {
++            let cell = try resolveMessageCell(threadID: threadID, messageGUID: messageID, partIndex: nil)
++            phase = .preparation
++            try prepareForAutomation()
++            defer { finishedAutomation() }
++            phase = .selection
++            try withMessageCell(threadID: threadID, messageCell: cell, readPhase: { phase = $0 }) { _ in
++                if try !db.isThreadRead(chatGUID: threadID) {
++                    phase = .markAction
++                    // Explicit desired state once, never a read/unread toggle.
++                    try triggerThreadCellAction(threadID: threadID, action: .markAsRead)
++                }
++            }
++        } catch { throw phase }
++    }
++
+     func toggleThreadRead(threadID: String, read: Bool) throws {
+         let startTime = Date()
+         defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
+@@ -1081,6 +1115,117 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+         }
+     }
+ 
++    /// Exactly one Return. Before-send failures are distinct from an uncertain Return.
++    func bbcReplyOnce(threadID: String, messageID: String, text: String) throws {
++        var phase = BBCNativeReplyFailure.resolution
++        do {
++            let cell = try resolveMessageCell(threadID: threadID, messageGUID: messageID, partIndex: nil)
++            phase = .preparation
++            try prepareForAutomation()
++            defer { finishedAutomation() }
++            phase = .editorUnavailable
++            let field = try? elements.messageBodyField
++            let draft = try field.map { try messageFieldValue($0) }
++            let conversationList = try elements.conversationsList
++            let selectedCount: Int?
++            do { selectedCount = try conversationList.selectedChildren.count() }
++            catch let error as AccessibilityError where error.code == .noValue { selectedCount = 0 }
++            if draft != nil { phase = .existingDraft }
++            guard BBCReplyDraftPolicy.maySelectTarget(draft: draft, selectedCount: selectedCount) else { throw phase }
++            phase = .selection
++            try withMessageCell(threadID: threadID, messageCell: cell) { element in
++                phase = .editorUnavailable
++                let selectedDraft = try messageFieldValue(elements.messageBodyField)
++                phase = .existingDraft
++                guard selectedDraft.isEmpty else { throw phase }
++                phase = .replySelection
++                guard let replyRow = elements.selectedThreadCell,
++                      let replyTitle = try? elements.mainWindow.title() else { throw phase }
++                let replyAddress = try splitThreadID(threadID).orThrow(phase).2
++                let replyOpeningBegan = Date()
++                // Inline children are resolved inside the already opened exact reply transcript.
++                // Their AX actions intentionally omit Reply; choosing it again cannot work.
++                if !cell.overlay {
++                    phase = .replyAction
++                    try messageAction(messageCell: element, action: .reply)()
++                }
++                phase = .replyTranscript
++                try waitUntilReplyTranscriptVisible()
++                phase = .replySelection
++                guard elements.selectedThreadCell == replyRow,
++                      (try? elements.mainWindow.title()) == replyTitle else { throw phase }
++                try assertSelectedThread(threadID: threadID, openingBegan: replyOpeningBegan, verifiedSelection: {
++                    BBCThreadSelectionBoundary.mayReuseSelectedDirectChat(
++                        address: replyAddress, isGroup: threadIDIsForGroup(threadID),
++                        beforeTitle: replyTitle, afterTitle: try? self.elements.mainWindow.title(),
++                        sameSelectedRow: self.elements.selectedThreadCell == replyRow
++                    )
++                })
++                let field = try elements.messageBodyField
++                phase = .replyDraft
++                guard try messageFieldValue(field).isEmpty else { throw phase }
++                phase = .assignment
++                try assignToMessageField(field, text: text)
++                phase = .verification
++                guard try messageFieldValue(field) == text else { throw phase }
++                focusMessageField(field)
++                phase = .send
++                try keyPresser.return()
++            }
++        } catch { throw phase }
++    }
++
++    /// A whitespace-only draft triggers native typing without a sendable message.
++    private var bbcTypingOwner: (chat: String, field: Accessibility.Element, row: Accessibility.Element)?
++
++    func bbcTypingStart(threadID: String, messageID: String) throws {
++        var phase = BBCNativeTypingFailure.preparation
++        do {
++            try prepareForAutomation()
++            defer { finishedAutomation() }
++            phase = .sourceEditor
++            let field = try? elements.messageBodyField
++            phase = .sourceDraft
++            let draft = try field.map { try messageFieldValue($0) }
++            phase = .selectionSnapshot
++            let conversationList = try elements.conversationsList
++            let selectedCount: Int?
++            do { selectedCount = try conversationList.selectedChildren.count() }
++            catch let error as AccessibilityError where error.code == .noValue { selectedCount = 0 }
++            phase = draft == nil ? .sourceEditor : .sourceDraft
++            // A fresh window can have no selected conversation/editor. Reuse
++            // the reply boundary: only verified zero selection permits opening
++            // the exact target, then check that target's actual draft again.
++            guard BBCReplyDraftPolicy.maySelectTarget(draft: draft, selectedCount: selectedCount) else { throw phase }
++            phase = .resolution
++            let target = try resolveMessageCell(threadID: threadID, messageGUID: messageID, partIndex: nil)
++            phase = .selection
++            try withMessageCell(threadID: threadID, messageCell: target) { _ in }
++            phase = .targetEditor
++            let targetField = try elements.messageBodyField
++            phase = .targetDraft
++            guard try messageFieldValue(targetField).isEmpty else { throw phase }
++            phase = .selectedRow
++            let row = try elements.selectedThreadCell.orThrow(phase)
++            phase = .navigation
++            try openDeepLink(try MessagesDeepLink(threadID: threadID, body: " ").url())
++            phase = .verification
++            try assertSelectedThread(threadID: threadID)
++            let ownedField = try elements.messageBodyField
++            guard elements.selectedThreadCell == row, try messageFieldValue(ownedField) == " " else { throw phase }
++            bbcTypingOwner = (threadID,ownedField,row)
++        } catch { throw phase }
++    }
++
++    /// Never navigate or clear another chat or text edited by the operator.
++    func bbcTypingStop(threadID: String) throws {
++        guard let owner = bbcTypingOwner, owner.chat == threadID else { return }
++        defer { bbcTypingOwner = nil }
++        guard elements.selectedThreadCell == owner.row,
++              try elements.messageBodyField == owner.field else { return }
++        if try messageFieldValue(owner.field) == " " { try owner.field.value(assign: "") }
++    }
++
+     func sendTypingStatus(threadID: String) throws {
+         // a space is enough to send a typing indicator, while ensuring that
+         // users can't accidentally hit return to send a single-char message
+@@ -1112,13 +1257,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+ 
+     private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
+         do {
+-            if isVenturaOrUp {
+-                let value = try (messageField.value() as? NSAttributedString)
+-                    .orThrow(ErrorMessage("couldn't cast message field value to NSAttributedString"))
+-                return value.string
+-            }
+-            return try (messageField.value() as? String)
+-                .orThrow(ErrorMessage("couldn't cast message field value to String"))
++            return try BBCComposeFieldValue.text(from: messageField.value())
++                .orThrow(ErrorMessage("unsupported message field value"))
+         } catch {
+             if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
+             throw error
+@@ -1595,7 +1735,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+         lifecycleConveyor?.cancel()
+         lifecycleEventsTask?.cancel()
+ 
+-        app.terminate()
++        // Messages is shared by the satellite's native actions. Releasing a
++        // controller (including failed construction) never quits that app.
+     }
+ 
+     deinit {
+diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
+index 24ae4ff3..f84f4877 100644
+--- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
++++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
+@@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
+         if let cached = state.database {
+             return cached
+         }
+-        let db = try IMDatabase(createIndexes: true)
++        let db = try IMDatabase(createIndexes: false)
+         state.database = db
+         return db
+     }
+@@ -63,6 +63,58 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
+ ///
+ /// `IMessageHost` owns singleton process state, so callers should create only one
+ /// PlatformAPI instance per process and share it across wrapper surfaces.
++public enum BBCNativeReplyFailure: String, Error { case resolution, preparation, editorUnavailable, existingDraft, selection, replyAction, replyTranscript, replySelection, replyDraft, assignment, verification, send }
++
++public enum BBCNativeReadFailure: String, Error { case controller, resolution, preparation, selection, focus, transcript, cell, markAction }
++
++public enum BBCNativeTypingFailure: String, Error, CaseIterable {
++    case preparation
++    case sourceEditor = "source_editor"
++    case sourceDraft = "source_draft"
++    case selectionSnapshot = "selection_snapshot"
++    case resolution, selection
++    case targetEditor = "target_editor"
++    case targetDraft = "target_draft"
++    case selectedRow = "selected_row"
++    case navigation, verification
++}
++
++
++/// Fixed labels only. Never serialize an underlying AppKit/AX error or tree.
++/// A missing editor is safe only when the native conversation list confirms no selection.
++/// AX compose values vary with Messages view and OS version, not just OS age.
++public enum BBCComposeFieldValue {
++    public static func text(from value: Any?) -> String? {
++        if let value = value as? NSAttributedString { return value.string }
++        return value as? String
++    }
++}
++
++public enum BBCReplyDraftPolicy {
++    public static func maySelectTarget(draft: String?, selectedCount: Int?) -> Bool {
++        if let draft { return draft.isEmpty }
++        return selectedCount == 0
++    }
++}
++
++public enum BBCNativeControllerFailure: String, Error, CaseIterable, Sendable {
++    case accessibility, coordination, discovery, ownership, launch, window, responsiveness
++
++    static func at<T>(_ stage: Self, _ body: () throws -> T) throws -> T {
++        do { return try body() }
++        catch let failure as Self { throw failure }
++        catch { throw stage }
++    }
++}
++
++public enum BBCControllerWindowPolicy {
++    /// Disabled coordination must never hide a window or target another user.
++    public static func mayUnhide(coordinating: Bool, effectiveUID: UInt32, processUID: UInt32?) -> Bool {
++        !coordinating && effectiveUID != 0 && processUID == effectiveUID
++    }
++}
++
++
+ public final class PlatformAPI {
+     private static let activeInstance = Protected<ObjectIdentifier?>()
+ 
+@@ -384,6 +436,40 @@ public final class PlatformAPI {
+         try await withMessagesController { try $0.undoSend(threadID: threadID, messageID: messageID) }
+     }
+ 
++    /// BBC's durable journal owns retries and exact database confirmation.
++    /// No generic retry loop and no Beeper event watcher or provider connection.
++    public func bbcSetReactionOnce(threadID: String, messageID: String, reaction: String, on: Bool) async throws {
++        try await withMessageSendLock {
++            try await withMessagesController { controller in
++                try controller.setReaction(threadID: threadID, messageID: messageID, reactionName: reaction, on: on)
++            }
++        }
++    }
++
++    public func bbcReplyOnce(threadID: String, messageID: String, text: String) async throws {
++        try await withMessageSendLock {
++            try await withMessagesController { try $0.bbcReplyOnce(threadID: threadID, messageID: messageID, text: text) }
++        }
++    }
++    public func bbcTyping(threadID: String, messageID: String, active: Bool) async throws {
++        try await withMessagesController { controller in
++            if active { try controller.bbcTypingStart(threadID: threadID, messageID: messageID) }
++            else { try controller.bbcTypingStop(threadID: threadID) }
++        }
++    }
++
++    public func bbcOpenReadThreadOnce(threadID: String, messageID: String) async throws {
++        do {
++            try await withMessageSendLock {
++                try await withMessagesController { controller in
++                    try controller.bbcOpenReadThreadOnce(threadID: threadID, messageID: messageID)
++                }
++            }
++        } catch let failure as BBCNativeReadFailure { throw failure }
++          catch let failure as BBCNativeControllerFailure { throw failure }
++          catch { throw BBCNativeReadFailure.controller }
++    }
++
+     public func sendReadReceipt(threadID publicThreadID: String) async throws {
+         let database = database
+         try await retry(retries: 1, interval: 1) { attempt in
+diff --git a/src/IMessage/Sources/IMessage/WindowCoordination/WindowCoordinators/BestWindowCoordinator.swift b/src/IMessage/Sources/IMessage/WindowCoordination/WindowCoordinators/BestWindowCoordinator.swift
+index 32c61050..9542f782 100644
+--- a/src/IMessage/Sources/IMessage/WindowCoordination/WindowCoordinators/BestWindowCoordinator.swift
++++ b/src/IMessage/Sources/IMessage/WindowCoordination/WindowCoordinators/BestWindowCoordinator.swift
+@@ -1,9 +1,12 @@
+ import Foundation
+ import Logging
++import AppKit
++import AccessibilityControl
+ 
+ private let log = Logger(imessageLabel: "best-window-coordinator")
+ 
+ func getBestWindowCoordinator() throws -> any WindowCoordinator {
++    guard Defaults.shouldCoordinateWindow else { return BBCPassiveWindowCoordinator() }
+     let specifiedCoordinator = Defaults.imessage.string(forKey: DefaultsKeys.coordinator)
+ 
+     if let specifiedCoordinator {
+@@ -24,3 +27,12 @@ func getBestWindowCoordinator() throws -> any WindowCoordinator {
+     log.debug("using spaces window coordinator")
+     return try SpacesWindowCoordinator()
+ }
++
++/// The short-lived helper does not own Messages' windows or process lifetime.
++final class BBCPassiveWindowCoordinator: WindowCoordinator {
++    var app: NSRunningApplication?
++    var canReuseExtantInstance: Bool { true }
++    func makeAutomatable(_: Accessibility.Element) throws { throw BBCNativeControllerFailure.coordination }
++    func automationDidComplete(_: Accessibility.Element) throws {}
++    func reset(_: Accessibility.Element) throws {}
++}
+diff --git a/src/IMessage/Sources/IMessageCore/Logging/IMessageLogHandler.swift b/src/IMessage/Sources/IMessageCore/Logging/IMessageLogHandler.swift
+index 23d3a31a..c6155d69 100644
+--- a/src/IMessage/Sources/IMessageCore/Logging/IMessageLogHandler.swift
++++ b/src/IMessage/Sources/IMessageCore/Logging/IMessageLogHandler.swift
+@@ -25,13 +25,8 @@ public struct IMessageLogHandler: LogHandler {
+     }
+ 
+     public func log(event: LogEvent) {
+-        let timestamp = dateFormatter.string(from: Date())
+-
+-        let formattedMessage = "\(timestamp) [\(event.level):\(identifier)] \(event.message)"
+-        Log.emitToConsole(formattedMessage)
+-
+-        emitToFile(line: formattedMessage)
+-        emitToOSLog(swiftLogLevel: event.level, message: formattedMessage)
++        // BBC emits only fixed-stage metadata in its own process. Upstream
++        // diagnostics can contain private Messages text, handles and paths.
+     }
+ 
+     private func emitToOSLog(swiftLogLevel: SwiftLogger.Level, message: String) {
