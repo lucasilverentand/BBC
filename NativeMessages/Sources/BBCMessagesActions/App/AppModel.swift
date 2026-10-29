@@ -10,6 +10,10 @@ import CoreServices
     private(set) var keys: [APIKeyRecord] = []
     private(set) var running = false
     private(set) var starting = false
+    private(set) var startAtLogin = LoginItem.enabled
+    private(set) var loginNeedsApproval = LoginItem.needsApproval
+    private(set) var updatingLogin = false
+    private var opened = false
     var error: String?
     private let store: APIKeyStore?
     private var server: LocalAPIServer?
@@ -19,6 +23,22 @@ import CoreServices
     init() {
         do { let value = try APIKeyStore(); store = value; keys = value.keys }
         catch { store = nil; self.error = "Could not open the local API key store. Check its ownership and permissions." }
+    }
+    func appOpened() {
+        guard !opened else { return }; opened = true
+        if UserDefaults.standard.bool(forKey: "startAPIOnLaunch") {
+            let port = UserDefaults.standard.object(forKey: "apiPort") as? Int ?? 7861
+            start(port: port, allowNetwork: UserDefaults.standard.bool(forKey: "allowNetwork"))
+        }
+    }
+    func refreshLoginItem() {
+        startAtLogin = LoginItem.enabled; loginNeedsApproval = LoginItem.needsApproval
+    }
+    func setStartAtLogin(_ value: Bool) async {
+        guard !updatingLogin else { return }; updatingLogin = true
+        defer { updatingLogin = false; refreshLoginItem() }
+        do { try await LoginItem.setEnabled(value) }
+        catch { self.error = "Could not update Start at login. Check Blue Bubble Club in System Settings → General → Login Items." }
     }
     func requestAutomation() async {
         do {

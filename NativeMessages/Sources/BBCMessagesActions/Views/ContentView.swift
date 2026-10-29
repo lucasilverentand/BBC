@@ -4,6 +4,8 @@ import AppKit
 struct ContentView: View {
     @Bindable var model: AppModel
     @AppStorage("apiPort") private var port = 7861
+    @AppStorage("startAPIOnLaunch") private var startAPIOnLaunch = false
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("allowNetwork") private var allowNetwork = false
     @State private var keyName = ""
     @State private var newKey: String?
@@ -25,6 +27,14 @@ struct ContentView: View {
                 Button(model.running || model.starting ? "Stop API" : "Start API") {
                     if model.running || model.starting { model.stop() } else { model.start(port: port, allowNetwork: allowNetwork) }
                 }.buttonStyle(.borderedProminent).disabled(model.keys.isEmpty && !model.running)
+            }
+            Section("Startup") {
+                Toggle("Start at login", isOn: Binding(get: { model.startAtLogin || model.loginNeedsApproval }, set: { value in Task { await model.setStartAtLogin(value) } })).disabled(model.updatingLogin)
+                Toggle("Start API when the app opens", isOn: $startAPIOnLaunch)
+                Text("The app starts after you sign into this Mac, when Messages can use your account.").font(.caption).foregroundStyle(.secondary)
+                if model.loginNeedsApproval {
+                    Button("Approve in Login Items…") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!) }
+                }
             }
             Section("API keys") {
                 ForEach(model.keys) { key in
@@ -51,6 +61,8 @@ struct ContentView: View {
             }
             if let error = model.error { Text(error).foregroundStyle(.red).font(.callout) }
         }.formStyle(.grouped)
+        .task { model.appOpened(); model.refreshLoginItem() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { model.refreshLoginItem() } }
         .sheet(isPresented: Binding(get: { newKey != nil }, set: { if !$0 { newKey = nil } })) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Save your API key").font(.title2.bold())
