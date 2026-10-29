@@ -8,7 +8,7 @@
         {
           "image-name": "Artwork.png",
           "name": "Blue bubble and clouds",
-          "glass": false
+          "glass": true
         }
       ],
       "shadow": {
@@ -16,8 +16,8 @@
         "opacity": 0
       },
       "translucency": {
-        "enabled": false,
-        "value": 0
+        "enabled": true,
+        "value": 0.15
       }
     }
   ],

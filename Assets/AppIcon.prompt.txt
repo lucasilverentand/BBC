@@ -15,3 +15,6 @@ Compiled app resources: build/AppIcon/AppIcon.icns and Assets.car.
 AppIcon.icns is a fallback export; AppIcon.png previews its native 256px size.
 The compiled asset catalog includes the larger renditions through 1024px.
 Reference: https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer
+
+Native material: Liquid Glass enabled on the artwork layer, with 0.15 translucency.
+The existing raster artwork is unchanged; the glass edge is rendered by macOS.
