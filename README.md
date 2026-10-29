@@ -27,7 +27,7 @@ cd BBC
 ./script/build_and_run.sh
 ```
 
-The script builds and signs `dist/Blue Bubble Club.app`. Open Messages and sign into iMessage in the same macOS account. Grant Blue Bubble Club Full Disk Access, Accessibility and Automation permission in System Settings. Status checks never prompt for permissions.
+The script builds and signs `dist/Blue Bubble Club.app`. Open Messages and sign into iMessage in the same macOS account. Use the app’s permission checklist to grant Full Disk Access, Accessibility and Messages Automation. Its floating setup helper stays beside System Settings and provides a draggable app icon for the permission lists. Readiness updates while the helper is open. Status checks never prompt for permissions.
 
 In Blue Bubble Club, create a named API key, save the secret in your client's secret settings and choose **Start API**. Enable **Start at login** to use macOS Login Items, and **Start API when the app opens** if the API should come up automatically. Both default off. Startup occurs in the signed-in user session, where Messages can access the account. The listener defaults to `127.0.0.1:7861`. Enable connections from other devices if needed; use your own trusted private network or HTTPS proxy. BBC does not configure remote access.
 

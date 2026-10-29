@@ -20,6 +20,7 @@ struct BlueBubbleClubApp: App {
 }
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.applicationIconImage = AppBrand.icon
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }

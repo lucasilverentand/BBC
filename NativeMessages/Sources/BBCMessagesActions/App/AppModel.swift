@@ -15,6 +15,8 @@ import CoreServices
     private(set) var updatingLogin = false
     private var opened = false
     var error: String?
+    private(set) var permissions = PermissionStatus()
+    @ObservationIgnored private let permissionHelper = PermissionHelperPanel()
     private let store: APIKeyStore?
     private var server: LocalAPIServer?
     private var router: APIRouter?
@@ -39,6 +41,23 @@ import CoreServices
         defer { updatingLogin = false; refreshLoginItem() }
         do { try await LoginItem.setEnabled(value) }
         catch { self.error = "Could not update Start at login. Check Blue Bubble Club in System Settings → General → Login Items." }
+    }
+    func refreshPermissions() { permissions = PermissionStatus.current() }
+    func showPermissionHelper() { refreshPermissions(); permissionHelper.show(model: self) }
+    func closePermissionHelper() { permissionHelper.close() }
+    func setUpPermission(_ step: PermissionStep) {
+        showPermissionHelper()
+        switch step {
+        case .fullDiskAccess: NSWorkspace.shared.open(step.settingsURL)
+        case .accessibility:
+            requestAccessibility()
+            NSWorkspace.shared.open(step.settingsURL)
+        case .automation:
+            Task {
+                await requestAutomation(); refreshPermissions()
+                if !permissions.automation { NSWorkspace.shared.open(step.settingsURL) }
+            }
+        }
     }
     func requestAutomation() async {
         do {

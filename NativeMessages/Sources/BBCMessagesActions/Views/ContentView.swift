@@ -13,7 +13,7 @@ struct ContentView: View {
         Form {
             Section {
                 HStack(alignment: .top) {
-                    Image(systemName: "bubble.left.and.bubble.right.fill").font(.largeTitle).foregroundStyle(.blue)
+                    Image(nsImage: AppBrand.icon).resizable().scaledToFit().frame(width: 48, height: 48)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Blue Bubble Club").font(.title2.bold())
                         Text("Your Mac. Your Messages. Your API.").foregroundStyle(.secondary)
@@ -51,18 +51,18 @@ struct ContentView: View {
                 Text("Keys allow messaging through this Mac. Their hashes stay on this Mac; each secret is shown once.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Messages permissions") {
-                Text("Sign into Messages in this macOS account. Allow Full Disk Access, Accessibility and Automation for Blue Bubble Club.").font(.callout)
+                PermissionChecklistView(model: model)
                 HStack {
-                    Button("Accessibility") { model.requestAccessibility() }
-                    Button("Automation") { Task { await model.requestAutomation() } }
-                    Button("Privacy settings") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!) }
-                    Button("API guide") { NSWorkspace.shared.open(URL(string: "https://github.com/lucasilverentand/BBC/blob/main/docs/api.md")!) }
+                    Button("Show setup helper") { model.showPermissionHelper() }
+                    Button("Recheck") { model.refreshPermissions() }
+                    Spacer()
+                    Text("\(model.permissions.grantedCount) of 3 ready").font(.caption).foregroundStyle(.secondary)
                 }
             }
             if let error = model.error { Text(error).foregroundStyle(.red).font(.callout) }
         }.formStyle(.grouped)
-        .task { model.appOpened(); model.refreshLoginItem() }
-        .onChange(of: scenePhase) { _, phase in if phase == .active { model.refreshLoginItem() } }
+        .task { model.appOpened(); model.refreshLoginItem(); model.refreshPermissions() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { model.refreshLoginItem(); model.refreshPermissions() } }
         .sheet(isPresented: Binding(get: { newKey != nil }, set: { if !$0 { newKey = nil } })) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Save your API key").font(.title2.bold())
