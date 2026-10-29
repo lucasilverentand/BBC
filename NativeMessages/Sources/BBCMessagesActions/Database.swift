@@ -76,18 +76,24 @@ final class MessagesDatabase {
         return values.first?.first
     }
     func reaction(chat: String, message: String) throws -> Int? {
-        // The most recent native own reaction (including a removal) is the state.
-        // Full GUID equality, no suffix/substring match, and no reaction on another part.
-        let rows = try rows("""
-            SELECT m.associated_message_type FROM message m
+        try reactionValue(chat: chat, message: message).flatMap { NativeRequest.reactions.firstIndex(of: $0) }
+    }
+    func optionalMessageColumn(_ name: String, fallback: String = "''") throws -> String {
+        try rows("PRAGMA table_info(message)", []).contains { $0[1] == name } ? "COALESCE(m.\(name),\(fallback))" : fallback
+    }
+    func reactionValue(chat: String, message: String) throws -> String? {
+        let emoji = try optionalMessageColumn("associated_message_emoji")
+        let values = try rows("""
+            SELECT m.associated_message_type, \(emoji) FROM message m
             JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id
-            WHERE c.guid=?1 AND m.is_from_me=1
+            WHERE c.guid=?1 AND m.is_from_me=1 AND m.service='iMessage'
               AND m.associated_message_guid IN (?2, ?3)
-              AND (m.associated_message_type BETWEEN 2000 AND 2005 OR m.associated_message_type BETWEEN 3000 AND 3005)
+              AND (m.associated_message_type BETWEEN 2000 AND 2007 OR m.associated_message_type BETWEEN 3000 AND 3007)
             ORDER BY m.ROWID DESC LIMIT 1
             """, [chat, message, "p:0/" + message])
-        guard let raw = rows.first?.first, let type = Int(raw), (2000...2005).contains(type) else { return nil }
-        return type - 2000
+        guard let row = values.first, let type = Int(row[0]) else { return nil }
+        if (2000...2005).contains(type) { return NativeRequest.reactions[type - 2000] }
+        return type == 2006 && EmojiTapback.valid(row[1]) ? row[1] : nil
     }
     func audioAttachment(chat: String, message: String, attachment: String) throws -> AudioAttachment {
         try verify(chat: chat, message: message)
@@ -173,22 +179,24 @@ struct NativeRequest: Decodable {
         let text: String?
         let typing_id: String?
         let deadline: Double?
+        let url: String?
     }
     static let reactions = ["love", "like", "dislike", "laugh", "emphasis", "question"]
     static let beeperReactions = ["heart", "like", "dislike", "laugh", "emphasize", "question"]
     func validated() throws -> Parameters {
-        guard let params, ["tapback", "read", "read.status", "media.transcribe", "media.visual", "reply", "typing.start"].contains(method), params.chat_guid.utf8.count <= 512,
+        guard let params, ["tapback", "read", "read.status", "media.transcribe", "media.visual", "reply", "link", "typing.start"].contains(method), params.chat_guid.utf8.count <= 512,
               let guid = params.message_guid, UUID(uuidString: guid) != nil else { throw ActionFailure.invalid }
-        if method == "tapback" { guard Self.reactions.contains(params.reaction ?? "") else { throw ActionFailure.invalid } }
+        if method == "tapback" { guard Self.reactions.contains(params.reaction ?? "") || EmojiTapback.valid(params.reaction ?? "") else { throw ActionFailure.invalid } }
         if ["media.transcribe", "media.visual"].contains(method) {
             guard let attachment = params.attachment_guid, !attachment.isEmpty, attachment.utf8.count <= 256,
                   !attachment.utf8.contains(0) else { throw ActionFailure.invalid }
         }
+        if method == "link" { guard let url = params.url, RichLinks.validURL(url) != nil else { throw ActionFailure.invalid } }
         if method == "reply" { guard let text = params.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 64000 else { throw ActionFailure.invalid } }
         if method == "typing.start" { guard params.typing_id.flatMap(UUID.init(uuidString:)) != nil, let deadline = params.deadline, deadline.isFinite, deadline > Date().timeIntervalSince1970 * 1000, deadline <= (Date().timeIntervalSince1970 + 31) * 1000 else { throw ActionFailure.invalid } }
-        if ["read", "read.status", "reply", "typing.start"].contains(method) {
+        if ["read", "read.status", "reply", "link", "typing.start"].contains(method) {
             guard let ids = params.read_guids, !ids.isEmpty, ids.count <= 200,
-                  Set(ids).count == ids.count, (method == "reply" || ids.contains(guid)), ids.allSatisfy({ UUID(uuidString: $0) != nil }) else { throw ActionFailure.invalid }
+                  Set(ids).count == ids.count, (["reply", "link"].contains(method) || ids.contains(guid)), ids.allSatisfy({ UUID(uuidString: $0) != nil }) else { throw ActionFailure.invalid }
         }
         return params
     }

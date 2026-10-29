@@ -35,7 +35,7 @@ struct BBCMessagesActions {
             let automation = automationStatus == noErr
             if request.method == "status" {
                 NativeMessagesObservation.record()
-                var methods = ax && automation ? ["tapback", "read", "reply", "typing"] : []
+                var methods = ax && automation ? ["tapback", "read", "reply", "link", "typing"] : []
                 methods.append("media.visual")
                 if LocalModels.ready { methods.append("media.transcribe") }
                 receipt = ["ok": true, "accessibility": ax, "automation": automation,
@@ -93,31 +93,39 @@ struct BBCMessagesActions {
                     let unread = try database.unread(chat: p.chat_guid)
                     receipt = ["ok": true, "observation_only": true, "chat_guid": p.chat_guid,
                                "message_guid": guid, "target_read": !unread.contains(guid), "native_unread_count": unread.count]
-                } else if request.method == "reply" {
+                } else if ["reply", "link"].contains(request.method) {
                     let unread = try database.unread(chat: p.chat_guid)
                     guard Set(unread).isSubset(of: Set(p.read_guids!)) else { throw ActionFailure.invalid }
-                        let root = try database.threadRoot(chat: p.chat_guid, message: guid)
-                        let before = try database.maximumRowID()
-                        phase = "messages_startup"
-                        let pid = try await NativeMessagesStartup.ensureRunning()
-                        phase = "system_permissions"
-                        guard NativeMessagesStartup.automationStatus(pid: pid) == noErr else { throw ActionFailure.unavailable }
-                        phase = "adapter_setup"
-                        let api = try initialize(directory)
-                        guard Set(try database.unread(chat: p.chat_guid)).isSubset(of: Set(p.read_guids!)) else { throw ActionFailure.invalid }
-                        attempted = true; phase = "reply_ui"
-                        trace?.record(phase, attempted: attempted)
-                        try await api.bbcReplyOnce(threadID: p.chat_guid, messageID: guid, text: p.text!)
-                        phase = "reply_confirmation"
-                        trace?.record(phase, attempted: attempted)
-                        var sent: String?
-                        try await confirm { sent = try database.confirmedReply(chat: p.chat_guid, root: root, text: p.text!, after: before); return sent != nil }
-                        receipt = ["ok": true, "guid": sent!, "chat_guid": p.chat_guid, "reply_to_guid": guid, "thread_root_guid": root, "confirmation": "local-database"]
+                    let root = try database.threadRoot(chat: p.chat_guid, message: guid)
+                    let before = try database.maximumRowID()
+                    phase = "messages_startup"
+                    let pid = try await NativeMessagesStartup.ensureRunning()
+                    phase = "system_permissions"
+                    guard NativeMessagesStartup.automationStatus(pid: pid) == noErr else { throw ActionFailure.unavailable }
+                    phase = "adapter_setup"
+                    let api = try initialize(directory)
+                    guard Set(try database.unread(chat: p.chat_guid)).isSubset(of: Set(p.read_guids!)) else { throw ActionFailure.invalid }
+                    attempted = true; phase = request.method == "link" ? "link_ui" : "reply_ui"
+                    trace?.record(phase, attempted: attempted)
+                    let text = request.method == "link" ? p.url! : p.text!
+                    if request.method == "link" { try await api.bbcSendLinkOnce(threadID: p.chat_guid, messageID: guid, url: text) }
+                    else { try await api.bbcReplyOnce(threadID: p.chat_guid, messageID: guid, text: text) }
+                    phase = request.method == "link" ? "link_confirmation" : "reply_confirmation"
+                    trace?.record(phase, attempted: attempted)
+                    var sent: String?
+                    try await confirm { sent = request.method == "link"
+                            ? try database.confirmedLink(chat: p.chat_guid, text: text, after: before)
+                            : try database.confirmedReply(chat: p.chat_guid, root: root, text: text, after: before)
+                        return sent != nil }
+                    receipt = ["ok": true, "guid": sent!, "chat_guid": p.chat_guid, "confirmation": "local-database"]
+                    if request.method == "reply" { receipt["reply_to_guid"] = guid; receipt["thread_root_guid"] = root }
+                    else { receipt["url"] = text; receipt["preview"] = "managed-by-messages" }
                 } else if request.method == "tapback" {
                     phase = "reaction_snapshot"
-                    let index = NativeRequest.reactions.firstIndex(of: p.reaction!)!
+                    let reaction = p.reaction!
+                    let nativeReaction = NativeRequest.reactions.firstIndex(of: reaction).map { NativeRequest.beeperReactions[$0] } ?? reaction
                     let remove = p.remove ?? false
-                    if NativeRequest.isDesired(current: try database.reaction(chat: p.chat_guid, message: guid), reaction: index, remove: remove) {
+                    if EmojiTapback.isDesired(current: try database.reactionValue(chat: p.chat_guid, message: guid), reaction: reaction, remove: remove) {
                         receipt = ["ok": true, "unchanged": true, "message_guid": guid, "chat_guid": p.chat_guid]
                     } else {
                         phase = "messages_startup"
@@ -128,10 +136,10 @@ struct BBCMessagesActions {
                         let api = try initialize(directory)
                         attempted = true
                         phase = "reaction_ui"
-                        try await api.bbcSetReactionOnce(threadID: p.chat_guid, messageID: guid, reaction: NativeRequest.beeperReactions[index], on: !remove)
+                        try await api.bbcSetReactionOnce(threadID: p.chat_guid, messageID: guid, reaction: nativeReaction, on: !remove)
                         phase = "reaction_confirmation"
                         try await confirm {
-                            NativeRequest.isDesired(current: try database.reaction(chat: p.chat_guid, message: guid), reaction: index, remove: remove)
+                            EmojiTapback.isDesired(current: try database.reactionValue(chat: p.chat_guid, message: guid), reaction: reaction, remove: remove)
                         }
                         receipt = ["ok": true, "message_guid": guid, "chat_guid": p.chat_guid, "reaction": p.reaction!, "remove": remove, "confirmation": "local-database"]
                     }

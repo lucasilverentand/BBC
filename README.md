@@ -7,8 +7,10 @@ Build bots and messaging integrations with native iMessage threads, reactions an
 ## Features
 
 - **Threaded replies** attached to the original message.
-- **Tapbacks** — add or remove the six classic reactions.
+- **Tapbacks** — classic reactions and custom emoji.
 - **Typing indicators, read receipts and delivery-state checks.**
+- **Photos, videos and audio** — send uploads and download received attachments.
+- **Rich links** with native previews and received link metadata.
 - **Local media processing**, including optional on-device audio transcription.
 - **Revocable API keys** and saved operation receipts to guard against duplicate sends.
 - **Guided setup** with a floating permissions helper, draggable app icon and startup toggles.

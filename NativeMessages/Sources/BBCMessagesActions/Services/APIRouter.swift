@@ -5,6 +5,7 @@ import BBCClient
 @MainActor final class APIRouter {
     let keys: APIKeyStore
     private let execute: @MainActor (BBCJSONValue) async throws -> BBCJSONValue
+    private var uploading = false
     private var typing: [UUID: Task<Void, Never>] = [:]
     init(keys: APIKeyStore, execute: @escaping @MainActor (BBCJSONValue) async throws -> BBCJSONValue) { self.keys = keys; self.execute = execute }
     struct Response { let status: Int; let value: BBCJSONValue }
@@ -23,10 +24,16 @@ import BBCClient
             }
             if method == "GET", path == "/v1/status" { return .init(status: 200, value: try await execute(.object(["method": .string("status")]))) }
             guard method == "POST" else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
+            if path == "/v1/media/upload" {
+                guard !uploading, let filename = headers["x-bbc-filename"] else { throw ActionFailure.invalid }
+                uploading = true; defer { uploading = false }
+                let store = try MediaStore(directory: keys.directory.appendingPathComponent("media"))
+                return .init(status: 201, value: try await store.create(body, filename: filename).packet)
+            }
             let request = try JSONDecoder().decode(BBCJSONValue.self, from: body)
-            let endpointMethods = ["/v1/messages": "send", "/v1/messages/after": "messages.after", "/v1/messages/status": "messages.status", "/v1/replies": "reply", "/v1/tapbacks": "tapback", "/v1/read": "read", "/v1/read/status": "read.status", "/v1/typing/start": "typing.start", "/v1/typing/stop": "typing.stop", "/v1/media/visual": "media.visual", "/v1/media/transcribe": "media.transcribe"]
+            let endpointMethods = ["/v1/messages": "send", "/v1/messages/after": "messages.after", "/v1/messages/status": "messages.status", "/v1/replies": "reply", "/v1/links": "link", "/v1/media/download": "media.download", "/v1/tapbacks": "tapback", "/v1/read": "read", "/v1/read/status": "read.status", "/v1/typing/start": "typing.start", "/v1/typing/stop": "typing.stop", "/v1/media/visual": "media.visual", "/v1/media/transcribe": "media.transcribe"]
             guard let operationMethod = endpointMethods[path], var params = request.object else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
-            let observational = ["messages.after", "messages.status", "read.status", "media.visual", "media.transcribe"].contains(operationMethod)
+            let observational = ["messages.after", "messages.status", "media.download", "read.status", "media.visual", "media.transcribe"].contains(operationMethod)
             if operationMethod == "send" {
                 params["service"] = .string("imessage"); params["allow_sms_fallback"] = .bool(false)
             }

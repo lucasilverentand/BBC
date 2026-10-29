@@ -62,6 +62,19 @@ index 936ae9fc..d3babc3a 100644
              }
              //            try? MessagesController.resizeWindowToMaxHeight(mainWindow)
              // clearCachedElements()
+diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController+PlatformOperations.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController+PlatformOperations.swift
+index 63128ba7..f5d76054 100644
+--- a/src/IMessage/Sources/IMessage/Messages/MessagesController+PlatformOperations.swift
++++ b/src/IMessage/Sources/IMessage/Messages/MessagesController+PlatformOperations.swift
+@@ -10,7 +10,7 @@ extension MessagesController {
+             reaction
+         } else {
+             // assume an emoji itself was passed (beeper desktop)
+-            reactionName.withoutSkinToneModifiers.first.flatMap(Reaction.init(emoji:))
++            reactionName.count == 1 ? reactionName.first.flatMap(Reaction.init(emoji:)) : nil
+         }
+ 
+         guard let reaction else {
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController+ResolveMessageCell.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController+ResolveMessageCell.swift
 index 1998f6d7..63aee563 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController+ResolveMessageCell.swift
@@ -84,7 +97,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..2aeffddb 100644
+index bb6ae980..a625ccc6 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -359,7 +372,41 @@ index bb6ae980..2aeffddb 100644
              guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
                  guard let cell = try messageCell.overlay
                          ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
-@@ -818,16 +841,9 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -765,12 +788,12 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+ 
+             if case let .custom(emoji) = reaction, on {
+                 guard isSequoiaOrUp else { throw ErrorMessage("Custom emoji reactions are only supported on macOS 15 or later") }
+-                // TODO: support being able to pick a skin tone
++                let baseEmoji = String(emoji).withoutSkinToneModifiers.first ?? emoji
+                 let search: CharacterPickerSearch
+                 let supportsSkinToneVariants: Bool
+                 do {
+-                    search = try CharacterPickerSearch(finding: emoji)
+-                    supportsSkinToneVariants = try EMFEmojiToken(character: emoji).supportsSkinToneVariants
++                    search = try CharacterPickerSearch(finding: baseEmoji)
++                    supportsSkinToneVariants = try EMFEmojiToken(character: baseEmoji).supportsSkinToneVariants
+                 } catch {
+                     throw ReactionSearchError(emoji: emoji, underlying: error)
+                 }
+@@ -791,7 +814,16 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+                 try keyPresser.return() // select
+                 if supportsSkinToneVariants {
+                     Thread.sleep(forTimeInterval: 0.2) // wait for skin tone picker to appear
+-                    try keyPresser.return() // always select default skin tone
++                    if baseEmoji != emoji {
++                        // Never substitute the default tone for the requested emoji.
++                        // Only press an exact variant exposed by the native picker.
++                        let variant = try elements.characterPickerPopover.recursiveChildren().first {
++                            (try? $0.identifier()) == String(emoji)
++                                || ((try? $0.value()) as? String) == String(emoji)
++                                || (try? $0.title()) == String(emoji)
++                        }.orThrow(ErrorMessage("Requested emoji variant is not available in the native picker"))
++                        try variant.press()
++                    } else { try keyPresser.return() }
+                 }
+                 return
+             }
+@@ -818,16 +850,9 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
                  return buttons[idx]
              }()
  
@@ -379,7 +426,7 @@ index bb6ae980..2aeffddb 100644
          }
      }
  
-@@ -994,6 +1010,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -994,6 +1019,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
       3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
       4. threadCell.press() action hack                                       (unreliable)
       */
@@ -404,7 +451,7 @@ index bb6ae980..2aeffddb 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1115,117 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1124,142 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -468,6 +515,31 @@ index bb6ae980..2aeffddb 100644
 +        } catch { throw phase }
 +    }
 +
++    /// Use the native composer so Messages can generate its own URL preview.
++    /// Preserve drafts and send exactly once, with the selected conversation pinned.
++    func bbcSendLinkOnce(threadID: String, messageID: String, url: String) throws {
++        let cell = try resolveMessageCell(threadID: threadID, messageGUID: messageID, partIndex: nil, allowOverlay: false)
++        try prepareForAutomation()
++        defer { finishedAutomation() }
++        let draft = try (try? elements.messageBodyField).map { try messageFieldValue($0) }
++        let list = try elements.conversationsList
++        let selectedCount: Int?
++        do { selectedCount = try list.selectedChildren.count() }
++        catch let error as AccessibilityError where error.code == .noValue { selectedCount = 0 }
++        guard BBCReplyDraftPolicy.maySelectTarget(draft: draft, selectedCount: selectedCount),
++              (try? elements.replyTranscriptView) == nil else { throw BBCNativeReplyFailure.existingDraft }
++        try withMessageCell(threadID: threadID, messageCell: cell) { _ in
++            guard (try? elements.replyTranscriptView) == nil else { throw BBCNativeReplyFailure.replyTranscript }
++            let field = try elements.messageBodyField
++            guard try messageFieldValue(field).isEmpty else { throw BBCNativeReplyFailure.existingDraft }
++            try assignToMessageField(field, text: url)
++            guard try messageFieldValue(field) == url else { throw BBCNativeReplyFailure.verification }
++            try assertSelectedThread(threadID: threadID)
++            focusMessageField(field)
++            try keyPresser.return()
++        }
++    }
++
 +    /// A whitespace-only draft triggers native typing without a sendable message.
 +    private var bbcTypingOwner: (chat: String, field: Accessibility.Element, row: Accessibility.Element)?
 +
@@ -522,7 +594,7 @@ index bb6ae980..2aeffddb 100644
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1257,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1291,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -538,7 +610,7 @@ index bb6ae980..2aeffddb 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1735,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1769,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
@@ -549,7 +621,7 @@ index bb6ae980..2aeffddb 100644
  
      deinit {
 diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
-index 24ae4ff3..f84f4877 100644
+index 24ae4ff3..eedb128d 100644
 --- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
 +++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
 @@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
@@ -620,7 +692,7 @@ index 24ae4ff3..f84f4877 100644
  public final class PlatformAPI {
      private static let activeInstance = Protected<ObjectIdentifier?>()
  
-@@ -384,6 +436,40 @@ public final class PlatformAPI {
+@@ -384,6 +436,46 @@ public final class PlatformAPI {
          try await withMessagesController { try $0.undoSend(threadID: threadID, messageID: messageID) }
      }
  
@@ -631,6 +703,12 @@ index 24ae4ff3..f84f4877 100644
 +            try await withMessagesController { controller in
 +                try controller.setReaction(threadID: threadID, messageID: messageID, reactionName: reaction, on: on)
 +            }
++        }
++    }
++
++    public func bbcSendLinkOnce(threadID: String, messageID: String, url: String) async throws {
++        try await withMessageSendLock {
++            try await withMessagesController { try $0.bbcSendLinkOnce(threadID: threadID, messageID: messageID, url: url) }
 +        }
 +    }
 +

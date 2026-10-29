@@ -23,7 +23,7 @@ final class LocalAPIServer: @unchecked Sendable {
     }
     func stop() { listener.cancel(); queue.async { for connection in self.connections.values { connection.cancel() }; self.connections.removeAll() } }
     private func accept(_ connection: NWConnection) {
-        guard connections.count < 32 else { connection.cancel(); return }
+        guard connections.count < 8 else { connection.cancel(); return }
         let id = UUID(); connections[id] = connection
         connection.stateUpdateHandler = { [weak self] state in
             if case .cancelled = state { self?.connections.removeValue(forKey: id) }
@@ -31,16 +31,18 @@ final class LocalAPIServer: @unchecked Sendable {
         }
         connection.start(queue: queue)
         queue.asyncAfter(deadline: .now() + 60) { [weak connection] in connection?.cancel() }
-        receive(connection, accumulated: Data())
+        receive(connection, buffer: RequestBuffer())
     }
-    private func receive(_ connection: NWConnection, accumulated: Data) {
+    private final class RequestBuffer: @unchecked Sendable { var data = Data() }
+    private func receive(_ connection: NWConnection, buffer state: RequestBuffer) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, complete, error in
             guard let self else { connection.cancel(); return }
-            var buffer = accumulated; if let data { buffer.append(data) }
-            guard buffer.count <= 81920, error == nil else { self.reply(connection, status: 400, value: .object(["error": .string("invalid_request")])); return }
+            if let data { state.data.append(data) }
+            let buffer = state.data
+            guard buffer.count <= MediaStore.maximumBytes + 16384, error == nil else { self.reply(connection, status: 400, value: .object(["error": .string("invalid_request")])); return }
             guard let range = buffer.range(of: Data("\r\n\r\n".utf8)) else {
                 guard !complete, buffer.count <= 16384 else { connection.cancel(); return }
-                self.receive(connection, accumulated: buffer); return
+                self.receive(connection, buffer: state); return
             }
             guard range.upperBound <= 16384, let head = String(data: buffer[..<range.lowerBound], encoding: .utf8) else { connection.cancel(); return }
             let lines = head.components(separatedBy: "\r\n"), first = lines[0].split(separator: " ")
@@ -52,10 +54,11 @@ final class LocalAPIServer: @unchecked Sendable {
                 guard headers[name] == nil else { connection.cancel(); return }; headers[name] = value
             }
             guard headers["transfer-encoding"] == nil,
-                  let length = Int(headers["content-length"] ?? "0"), length >= 0, length <= 65536 else { connection.cancel(); return }
+                  let length = Int(headers["content-length"] ?? "0"), length >= 0, length <= (first[1] == "/v1/media/upload" ? MediaStore.maximumBytes : 65536) else { connection.cancel(); return }
+            let bodyCount = buffer.count - range.upperBound
+            guard bodyCount <= length else { connection.cancel(); return }
+            if bodyCount < length { guard !complete else { connection.cancel(); return }; self.receive(connection, buffer: state); return }
             let body = Data(buffer[range.upperBound...])
-            guard body.count <= length else { connection.cancel(); return }
-            if body.count < length { guard !complete else { connection.cancel(); return }; self.receive(connection, accumulated: buffer); return }
             let method = String(first[0]), path = String(first[1]), requestHeaders = headers
             Task { @MainActor in
                 let response = await self.router.handle(method: method, path: path, headers: requestHeaders, body: body)

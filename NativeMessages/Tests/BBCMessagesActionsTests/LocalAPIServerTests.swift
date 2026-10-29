@@ -23,6 +23,15 @@ import BBCClient
         XCTAssertEqual((rejected as? HTTPURLResponse)?.statusCode, 401); XCTAssertEqual(calls, 0)
         let response = try await BBCHTTPClient(baseURL: URL(string: "http://127.0.0.1:\(port)")!, apiKey: key).request(.object(["method": .string("status")]))
         XCTAssertEqual(response.object?["version"]?.string, "fixture"); XCTAssertEqual(calls, 1)
+        let client = BBCHTTPClient(baseURL: URL(string: "http://127.0.0.1:\(port)")!, apiKey: key)
+        let original = try RichMessagingTests.png() + Data(repeating: 0, count: 100_000)
+        let upload = try await client.uploadMedia(original, filename: "photo.png")
+        let id = try XCTUnwrap(upload.object?["media_id"]?.string)
+        let file = try MediaStore(directory: directory.appendingPathComponent("media")).resolve(id).1
+        XCTAssertEqual(try Data(contentsOf: file), original); XCTAssertEqual(calls, 1)
+        let download = try await client.request(.object(["method": .string("media.download"), "params": .object([:])]))
+        XCTAssertEqual(download.object?["version"]?.string, "fixture"); XCTAssertEqual(calls, 2)
+
     }
 }
 private final class ReadyOnce: @unchecked Sendable {
