@@ -1,160 +1,3 @@
-diff --git a/src/IMessage/Sources/IMessage/BBCNativeEmojiPickerSelection.swift b/src/IMessage/Sources/IMessage/BBCNativeEmojiPickerSelection.swift
-new file mode 100644
-index 00000000..59ac21ab
---- /dev/null
-+++ b/src/IMessage/Sources/IMessage/BBCNativeEmojiPickerSelection.swift
-@@ -0,0 +1,151 @@
-+import AppKit
-+import ApplicationServices
-+import Darwin
-+import Foundation
-+
-+/// CharacterPicker's embedded glyph can advertise AXPress without selecting
-+/// anything. Select its exact result container explicitly, then confirm exactly once.
-+public enum BBCNativeEmojiPickerSelection {
-+    public enum Failure: String, Error {
-+        case ownership, search, glyph, container, selectionWrite, selectionRead, confirmation
-+    }
-+
-+    public static func confirm(select: () throws -> Void, selected: () throws -> Bool?,
-+                               owned: () -> Bool, submit: () throws -> Void) throws {
-+        guard owned() else { throw Failure.search }
-+        try select()
-+        let deadline = Date().addingTimeInterval(0.75)
-+        repeat {
-+            guard owned() else { throw Failure.search }
-+            guard let state = try selected() else { throw Failure.selectionRead }
-+            if state {
-+                guard owned() else { throw Failure.search }
-+                try submit()
-+                return
-+            }
-+            Thread.sleep(forTimeInterval: 0.05)
-+        } while Date() < deadline
-+        throw Failure.selectionRead
-+    }
-+
-+    public static func activate(picker: AXUIElement, searchField: AXUIElement, glyph: AXUIElement,
-+                                ownerPID: pid_t, query: String, emoji: String) throws {
-+        var info = proc_bsdinfo()
-+        let size = MemoryLayout<proc_bsdinfo>.size
-+        guard getuid() != 0, getuid() == geteuid(), ownerPID > 0,
-+              proc_pidinfo(ownerPID, PROC_PIDTBSDINFO, 0, &info, Int32(size)) == Int32(size),
-+              info.pbi_uid == getuid(),
-+              NSRunningApplication(processIdentifier: ownerPID)?.bundleIdentifier == "com.apple.MobileSMS",
-+              [picker, searchField, glyph].allSatisfy({ pid($0) == ownerPID }),
-+              string(picker, kAXRoleAttribute) == kAXPopoverRole,
-+              descends(searchField, from: picker, ownerPID: ownerPID),
-+              descends(glyph, from: picker, ownerPID: ownerPID) else { throw Failure.ownership }
-+        guard emoji.count == 1, matches(glyph, emoji: emoji) else { throw Failure.glyph }
-+        guard actions(searchField)?.contains(kAXConfirmAction) == true else { throw Failure.confirmation }
-+
-+        // The list groups items into layout rows. Its selection API addresses
-+        // the selectable result group, which may be below a row wrapper.
-+        var branch = glyph
-+        var selectable: AXUIElement? = attribute(glyph, kAXSelectedAttribute) as? Bool != nil ? glyph : nil
-+        var target: (container: AXUIElement, item: AXUIElement)?
-+        for _ in 0..<16 {
-+            guard let parent = parent(branch), pid(parent) == ownerPID, !CFEqual(parent, picker) else { break }
-+            if selectable == nil, attribute(parent, kAXSelectedAttribute) as? Bool != nil { selectable = parent }
-+            if string(parent, kAXRoleAttribute) == kAXListRole,
-+               settable(parent, kAXSelectedChildrenAttribute), let item = selectable,
-+               descends(item, from: parent, ownerPID: ownerPID),
-+               singleActionableGlyph(in: item, glyph: glyph, ownerPID: ownerPID) {
-+                target = (parent, item)
-+                break
-+            }
-+            branch = parent
-+        }
-+        guard let target else { throw Failure.container }
-+        func owned() -> Bool {
-+            string(searchField, kAXValueAttribute) == query && matches(glyph, emoji: emoji)
-+                && pid(glyph) == ownerPID && pid(picker) == ownerPID
-+                && descends(glyph, from: picker, ownerPID: ownerPID)
-+        }
-+        try confirm(select: {
-+            guard AXUIElementSetAttributeValue(target.container, kAXSelectedChildrenAttribute as CFString,
-+                                              [target.item] as CFArray) == .success else { throw Failure.selectionWrite }
-+        }, selected: {
-+            guard let selected = attribute(target.container, kAXSelectedChildrenAttribute) as? [AXUIElement] else { return nil }
-+            return selected.count == 1 && CFEqual(selected[0], target.item)
-+        }, owned: owned, submit: {
-+            guard owned(), singleActionableGlyph(in: target.item, glyph: glyph, ownerPID: ownerPID),
-+                  let selected = attribute(target.container, kAXSelectedChildrenAttribute) as? [AXUIElement],
-+                  selected.count == 1, CFEqual(selected[0], target.item),
-+                  actions(searchField)?.contains(kAXConfirmAction) == true else { throw Failure.confirmation }
-+            guard AXUIElementPerformAction(searchField, kAXConfirmAction as CFString) == .success else { throw Failure.confirmation }
-+        })
-+    }
-+
-+    private static func attribute(_ node: AXUIElement, _ key: String) -> CFTypeRef? {
-+        var value: CFTypeRef?
-+        guard AXUIElementCopyAttributeValue(node, key as CFString, &value) == .success else { return nil }
-+        return value
-+    }
-+    private static func string(_ node: AXUIElement, _ key: String) -> String? { attribute(node, key) as? String }
-+    private static func children(_ node: AXUIElement) -> [AXUIElement] { attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? [] }
-+    private static func parent(_ node: AXUIElement) -> AXUIElement? {
-+        guard let raw = attribute(node, kAXParentAttribute), CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
-+        return unsafeDowncast(raw, to: AXUIElement.self)
-+    }
-+    private static func pid(_ node: AXUIElement) -> pid_t? {
-+        var value: pid_t = 0
-+        return AXUIElementGetPid(node, &value) == .success ? value : nil
-+    }
-+    private static func settable(_ node: AXUIElement, _ key: String) -> Bool {
-+        var value = DarwinBoolean(false)
-+        return AXUIElementIsAttributeSettable(node, key as CFString, &value) == .success && value.boolValue
-+    }
-+    private static func actions(_ node: AXUIElement) -> [String]? {
-+        var value: CFArray?
-+        guard AXUIElementCopyActionNames(node, &value) == .success else { return nil }
-+        return value as? [String]
-+    }
-+    private static func matches(_ node: AXUIElement, emoji: String) -> Bool {
-+        let value = attribute(node, kAXValueAttribute)
-+        return (value as? String) == emoji || (value as? NSAttributedString)?.string == emoji
-+            || [kAXIdentifierAttribute, kAXTitleAttribute, kAXDescriptionAttribute].contains { string(node, $0) == emoji }
-+    }
-+    private static func descends(_ node: AXUIElement, from ancestor: AXUIElement, ownerPID: pid_t) -> Bool {
-+        var cursor: AXUIElement? = node
-+        for _ in 0..<16 {
-+            guard let current = cursor, pid(current) == ownerPID else { return false }
-+            if CFEqual(current, ancestor) { return true }
-+            cursor = parent(current)
-+        }
-+        return false
-+    }
-+    private static func singleActionableGlyph(in item: AXUIElement, glyph: AXUIElement, ownerPID: pid_t) -> Bool {
-+        var queue = [item], index = 0, actionable = [AXUIElement]()
-+        while index < queue.count, queue.count <= 128 {
-+            let node = queue[index]; index += 1
-+            guard pid(node) == ownerPID else { return false }
-+            var raw: CFTypeRef?
-+            let childStatus = AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &raw)
-+            let descendants: [AXUIElement]
-+            if childStatus == .success {
-+                guard let values = raw as? [AXUIElement] else { return false }
-+                descendants = values
-+            } else if childStatus == .noValue || childStatus == .attributeUnsupported { descendants = [] }
-+            else { return false }
-+            guard queue.count + descendants.count <= 128 else { return false }
-+            var rawNames: CFArray?
-+            let actionStatus = AXUIElementCopyActionNames(node, &rawNames)
-+            if actionStatus == .success, let names = rawNames as? [String] {
-+                if !Set(names).isDisjoint(with: [kAXPressAction, kAXConfirmAction, kAXPickAction]) { actionable.append(node) }
-+            } else {
-+                // Embedded CharacterPicker layout wrappers return AXFailure for
-+                // action names. Only these zero/one-child groups are structural;
-+                // the glyph and every interactive control still need readable actions.
-+                guard actionStatus == .failure, string(node, kAXRoleAttribute) == kAXGroupRole,
-+                      descendants.count <= 1, !CFEqual(node, glyph) else { return false }
-+            }
-+            queue += descendants
-+        }
-+        return index == queue.count && actionable.count == 1 && CFEqual(actionable[0], glyph)
-+    }
-+}
 diff --git a/src/IMessage/Sources/IMessage/Defaults.swift b/src/IMessage/Sources/IMessage/Defaults.swift
 index 14b5d962..1e372ee8 100644
 --- a/src/IMessage/Sources/IMessage/Defaults.swift
@@ -186,7 +29,7 @@ index 14b5d962..1e372ee8 100644
      static func resetPrompts() {
          // getUserDefaults(bundleID: messagesBundleID)?.set(true, forKey: "kHasSetupHashtagImages") // unknown
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift b/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
-index 936ae9fc..d3babc3a 100644
+index 936ae9fc..dfb997cd 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
 @@ -270,29 +270,6 @@ final class MessagesAppElements {
@@ -219,6 +62,20 @@ index 936ae9fc..d3babc3a 100644
              }
              //            try? MessagesController.resizeWindowToMaxHeight(mainWindow)
              // clearCachedElements()
+@@ -498,6 +475,13 @@ final class MessagesAppElements {
+         }
+     }
+ 
++    /// Re-resolve through on-screen owned windows before touching a saved
++    /// popover: stale AX references may remain readable after dismissal.
++    func isVisibleCharacterPicker(_ popover: Accessibility.Element) -> Bool {
++        guard (try? popover.pid()) == runningApp.processIdentifier else { return false }
++        return (try? characterPickerPopoverLocator.detachedPopover()) == popover
++    }
++
+     /// The search field within the emoji picker popover.
+     var characterPickerSearchField: Accessibility.Element {
+         get throws {
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController+PlatformOperations.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController+PlatformOperations.swift
 index 63128ba7..4b9e1bd2 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController+PlatformOperations.swift
@@ -273,7 +130,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..cd874bf0 100644
+index bb6ae980..5a680ae5 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -513,7 +370,26 @@ index bb6ae980..cd874bf0 100644
          }
      }
  
-@@ -591,14 +600,14 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -510,14 +519,16 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+         }
+     }
+ 
+-    private func openCustomEmojiReactionPicker(messageCell: Accessibility.Element) throws {
++    private func openCustomEmojiReactionPicker(messageCell: Accessibility.Element, tapbackPickerAlreadyOpen: Bool = false) throws {
+         if let action = try customMessageAction(messageCell: messageCell, named: LocalizedStrings.addEmojiTapback) {
+             try action()
++            os.Logger(subsystem: "club.bluebubble.transport", category: "NativeEmojiPicker").notice("Emoji picker opened via native message action")
+             return
+         }
+ 
+-        try openReactionPicker(messageCell: messageCell)
++        if !tapbackPickerAlreadyOpen { try openReactionPicker(messageCell: messageCell) }
+         try elements.addCustomEmojiReactionButton.press()
++        os.Logger(subsystem: "club.bluebubble.transport", category: "NativeEmojiPicker").notice("Emoji picker opened via native bar button")
+     }
+ 
+     private func threadCellAction(threadCell: Accessibility.Element, namePrefix: String) throws -> Accessibility.Action? {
+@@ -591,14 +602,14 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      // performs `perform` while the Messages window is unhidden
      private func withActivation(
@@ -530,7 +406,7 @@ index bb6ae980..cd874bf0 100644
          }
  
          try perform()
-@@ -672,7 +681,7 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -672,7 +683,7 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          log.debug("reveal: 5/5 done, proceeding with grabbing the cell")
      }
  
@@ -539,7 +415,7 @@ index bb6ae980..cd874bf0 100644
          log.debug("withMessageCell (messageCell=\(messageCell))")
  
          let url = try MessagesDeepLink.message(
-@@ -686,8 +695,21 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -686,8 +697,21 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
              try? closeReplyTranscriptView(wait: false)
          }
  
@@ -563,7 +439,7 @@ index bb6ae980..cd874bf0 100644
  
              // we don't close transcript view here because when reacting, closing it will undo the reaction
              // defer {
-@@ -696,9 +718,11 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -696,9 +720,11 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
              //         closeReplyTranscriptView(wait: true)
              //     }
              // }
@@ -575,7 +451,7 @@ index bb6ae980..cd874bf0 100644
              guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
                  guard let cell = try messageCell.overlay
                          ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
-@@ -750,85 +774,167 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -750,85 +776,162 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -660,12 +536,12 @@ index bb6ae980..cd874bf0 100644
 -                            return identifier == reaction.idOrEmoji
 +    
 +                if case let .custom(emoji) = reaction, on {
++                    let testMode = ProcessInfo.processInfo.environment["BBC_TEST_FULL_EMOJI_PICKER"]
++                    let observeOnly = testMode == "observe"
++                    let forcePicker = testMode == "1" || observeOnly
 +                    phase = .picker
-+                    try openReactionPicker(messageCell: $0)
-+                    // Development-only route selection lets one emoji reproduce the
-+                    // full-picker path even after it becomes a recent Tapback.
-+                    if ProcessInfo.processInfo.environment["BBC_TEST_FULL_EMOJI_PICKER"] != "1",
-+                       let button = try elements.tapbackPickerCollectionView.children().first(where: {
++                    if !forcePicker { try openReactionPicker(messageCell: $0) }
++                    if !forcePicker, let button = try elements.tapbackPickerCollectionView.children().first(where: {
 +                        (try? $0.identifier()) == String(emoji)
 +                    }) {
 +                        phase = .apply
@@ -677,13 +553,17 @@ index bb6ae980..cd874bf0 100644
 +                    let baseEmoji = String(emoji).withoutSkinToneModifiers.first ?? emoji
 +                    let search = try CharacterPickerSearch(finding: baseEmoji)
 +                    phase = .menu
-+                    try elements.addCustomEmojiReactionButton.press()
++                    try openCustomEmojiReactionPicker(messageCell: $0, tapbackPickerAlreadyOpen: !forcePicker)
 +                    phase = .picker
 +                    let picker = try retry(withTimeout: 1.5, interval: 0.05) { try elements.characterPickerPopover }
 +                    let searchField = try elements.characterPickerSearchField
 +                    try searchField.value(assign: search.query)
-+                    func ownsSearch() -> Bool { ((try? searchField.value()) as? String) == search.query }
-+                    defer { if ownsSearch() { try? picker.cancel() } }
++                    func ownsSearch() -> Bool {
++                        (try? searchField.pid()) == self.app.processIdentifier &&
++                            ((try? searchField.value()) as? String) == search.query && self.elements.isVisibleCharacterPicker(picker)
++                    }
++                    defer { if !observeOnly, ownsSearch() { try? picker.cancel() } }
++                    try BBCNativeEmojiActivation.waitForSearch(owned: ownsSearch)
 +                    phase = .choice
 +                    let choice = try retry(withTimeout: 2, interval: 0.1) {
 +                        let choices = picker.recursiveChildren().compactMap { element -> (element: Accessibility.Element, actions: [String], rank: Int)? in
@@ -707,7 +587,7 @@ index bb6ae980..cd874bf0 100644
 -                    throw ErrorMessage("reactButtons count=\(buttons.count)")
 +                        return try choices.min(by: { $0.rank < $1.rank }).orThrow(BBCNativeReactionFailure.choice)
 +                    }
-+                    guard ownsSearch() else { throw BBCNativeReactionFailure.choice }
++                    guard ownsSearch(), (try? choice.element.pid()) == self.app.processIdentifier else { throw BBCNativeReactionFailure.choice }
 +                    var ancestors = [Accessibility.Element](), cursor = try? choice.element.parent()
 +                    var reachedPicker = false
 +                    let pickerPID = try picker.pid()
@@ -721,8 +601,12 @@ index bb6ae980..cd874bf0 100644
 +                        (try? node.supportedActions())?.first { $0.name.value == "AXConfirm" }
 +                    }.first : nil
 +                    let rawRole = (try? choice.element.role()) ?? "unknown"
-+                    let role = ["AXUnknown", "AXButton", "AXCell", "AXStaticText", "AXImage", "AXTextField"].contains(rawRole) ? rawRole : "other"
++                    let role = ["AXButton", "AXCell", "AXStaticText", "AXImage", "AXTextField"].contains(rawRole) ? rawRole : "other"
 +                    let logger = os.Logger(subsystem: "club.bluebubble.transport", category: "NativeEmojiPicker")
++                    if observeOnly {
++                        logger.notice("Emoji picker ready for native observation; no activation dispatched")
++                        throw BBCNativeReactionFailure.choice
++                    }
 +                    let hasConfirm = choice.actions.contains("AXConfirm"), hasPick = choice.actions.contains("AXPick")
 +                    let hasPress = choice.actions.contains("AXPress"), hasParentConfirm = confirmer != nil
 +                    let parentSummary = ancestors.prefix(6).map { node in
@@ -739,25 +623,12 @@ index bb6ae980..cd874bf0 100644
 +                            try action()
 +                        }
 +                    }
-+                    let action: String
-+                    if rawRole == "AXUnknown", BBCNativeEmojiActivation.preferredAction(choice.actions) == "AXPress" {
-+                        do {
-+                            try BBCNativeEmojiPickerSelection.activate(picker: picker.raw, searchField: searchField.raw,
-+                                                                       glyph: choice.element.raw, ownerPID: pickerPID,
-+                                                                       query: search.query, emoji: String(emoji))
-+                        } catch let failure as BBCNativeEmojiPickerSelection.Failure {
-+                            logger.notice("Emoji result selection failed stage=\(failure.rawValue, privacy: .public)")
-+                            throw failure
-+                        }
-+                        action = "AXSelectedChildren+AXConfirm"
-+                    } else {
-+                    action = try BBCNativeEmojiActivation.perform(supported: choice.actions, activate: { name in
++                    let action = try BBCNativeEmojiActivation.perform(supported: choice.actions, activate: { name in
 +                        guard ownsSearch() else { throw BBCNativeReactionFailure.choice }
 +                        try choice.element.action(.init(name))()
 +                    }, selected: {
 +                        ownsSearch() ? try? choice.element.isSelected() : nil
 +                    }, confirmSelection: confirmation)
-+                    }
 +                    let closingDeadline = Date().addingTimeInterval(0.75)
 +                    while ownsSearch(), Date() < closingDeadline { Thread.sleep(forTimeInterval: 0.05) }
 +                    let stillOpen = ownsSearch()
@@ -815,7 +686,7 @@ index bb6ae980..cd874bf0 100644
      }
  
      func undoSend(threadID: String, messageCell: MessageCell) throws {
-@@ -994,6 +1100,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -994,6 +1097,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
       3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
       4. threadCell.press() action hack                                       (unreliable)
       */
@@ -840,7 +711,7 @@ index bb6ae980..cd874bf0 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1205,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1202,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -986,7 +857,7 @@ index bb6ae980..cd874bf0 100644
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1375,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1372,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -1002,7 +873,7 @@ index bb6ae980..cd874bf0 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1853,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1850,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
@@ -1013,7 +884,7 @@ index bb6ae980..cd874bf0 100644
  
      deinit {
 diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
-index 24ae4ff3..8b196c46 100644
+index 24ae4ff3..e7b7ac34 100644
 --- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
 +++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
 @@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
@@ -1025,7 +896,7 @@ index 24ae4ff3..8b196c46 100644
          state.database = db
          return db
      }
-@@ -63,6 +63,92 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
+@@ -63,6 +63,103 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
  ///
  /// `IMessageHost` owns singleton process state, so callers should create only one
  /// PlatformAPI instance per process and share it across wrapper surfaces.
@@ -1043,6 +914,17 @@ index 24ae4ff3..8b196c46 100644
 +
 +/// Use only advertised actions on the exact glyph; never send a global Return.
 +public enum BBCNativeEmojiActivation {
++    /// Match the native adapter's search-settling boundary. A rendered glyph
++    /// alone does not establish that the character picker has finished updating.
++    public static func waitForSearch(owned: () -> Bool) throws {
++        let deadline = Date().addingTimeInterval(0.75)
++        repeat {
++            guard owned() else { throw BBCNativeReactionFailure.choice }
++            Thread.sleep(forTimeInterval: 0.05)
++        } while Date() < deadline
++        guard owned() else { throw BBCNativeReactionFailure.choice }
++    }
++
 +    public static func preferredAction(_ supported: [String]) -> String? {
 +        ["AXConfirm", "AXPick", "AXPress"].first { supported.contains($0) }
 +    }
@@ -1118,7 +1000,7 @@ index 24ae4ff3..8b196c46 100644
  public final class PlatformAPI {
      private static let activeInstance = Protected<ObjectIdentifier?>()
  
-@@ -384,6 +470,48 @@ public final class PlatformAPI {
+@@ -384,6 +481,48 @@ public final class PlatformAPI {
          try await withMessagesController { try $0.undoSend(threadID: threadID, messageID: messageID) }
      }
  
