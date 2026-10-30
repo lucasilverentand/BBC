@@ -125,7 +125,7 @@ struct BBCMessagesActions {
                     let reaction = p.reaction!
                     let nativeReaction = NativeRequest.reactions.firstIndex(of: reaction).map { NativeRequest.beeperReactions[$0] } ?? reaction
                     let remove = p.remove ?? false
-                    if EmojiTapback.isDesired(current: try database.reactionValue(chat: p.chat_guid, message: guid), reaction: reaction, remove: remove) {
+                    if !remove, EmojiTapback.isDesired(current: try database.reactionValue(chat: p.chat_guid, message: guid), reaction: reaction, remove: false) {
                         receipt = ["ok": true, "unchanged": true, "message_guid": guid, "chat_guid": p.chat_guid]
                     } else {
                         phase = "messages_startup"
@@ -136,12 +136,17 @@ struct BBCMessagesActions {
                         let api = try initialize(directory)
                         attempted = true
                         phase = "reaction_ui"
-                        try await api.bbcSetReactionOnce(threadID: p.chat_guid, messageID: guid, reaction: nativeReaction, on: !remove)
+                        let removalObserved = try await api.bbcSetReactionOnce(threadID: p.chat_guid, messageID: guid, reaction: nativeReaction, on: !remove)
                         phase = "reaction_confirmation"
-                        try await confirm {
-                            EmojiTapback.isDesired(current: try database.reactionValue(chat: p.chat_guid, message: guid), reaction: reaction, remove: remove)
+                        if remove {
+                            guard removalObserved else { throw ActionFailure.uncertain }
+                        } else {
+                            try await confirm {
+                                EmojiTapback.isDesired(current: try database.reactionValue(chat: p.chat_guid, message: guid), reaction: reaction, remove: remove)
+                            }
                         }
-                        receipt = ["ok": true, "message_guid": guid, "chat_guid": p.chat_guid, "reaction": p.reaction!, "remove": remove, "confirmation": "local-database"]
+                        receipt = ["ok": true, "message_guid": guid, "chat_guid": p.chat_guid, "reaction": p.reaction!, "remove": remove,
+                                   "confirmation": removalObserved ? "native-ui" : "local-database"]
                     }
                 } else {
                     phase = "read_snapshot"
