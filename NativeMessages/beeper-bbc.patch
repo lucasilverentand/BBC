@@ -116,7 +116,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..c0cebfa9 100644
+index bb6ae980..aad1e9ab 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -409,7 +409,7 @@ index bb6ae980..c0cebfa9 100644
              guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
                  guard let cell = try messageCell.overlay
                          ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
-@@ -750,85 +773,96 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -750,85 +773,106 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -442,7 +442,7 @@ index bb6ae980..c0cebfa9 100644
 -                    try elements.characterPickerSearchField
 +    @discardableResult
 +    func setReaction(threadID: String, messageCell: MessageCell, reaction: Reaction, on: Bool) throws -> Bool {
-+        var removalObserved = false
++        var nativeStateObserved = false
 +        var phase = BBCNativeReactionFailure.preparation
 +        do {
 +    
@@ -475,7 +475,7 @@ index bb6ae980..c0cebfa9 100644
 -                    Thread.sleep(forTimeInterval: 0.2) // wait for skin tone picker to appear
 -                    try keyPresser.return() // always select default skin tone
 +            }) {
-+                if on, let directAction = try directReactionAction(messageCell: $0, reaction: reaction) {
++                if on, reaction.index != nil, let directAction = try directReactionAction(messageCell: $0, reaction: reaction) {
 +                    phase = .directAction
 +                    try directAction()
 +                    return
@@ -494,11 +494,21 @@ index bb6ae980..c0cebfa9 100644
 -                            return identifier == reaction.idOrEmoji
 +    
 +                if case let .custom(emoji) = reaction, on {
++                    phase = .picker
++                    try openReactionPicker(messageCell: $0)
++                    if let button = try elements.tapbackPickerCollectionView.children().first(where: {
++                        (try? $0.identifier()) == String(emoji)
++                    }) {
++                        phase = .apply
++                        try BBCNativeReactionSelection.perform(desired: true, selected: { try button.isSelected() }, press: { try button.press() })
++                        nativeStateObserved = true
++                        return
++                    }
 +                    phase = .search
 +                    let baseEmoji = String(emoji).withoutSkinToneModifiers.first ?? emoji
 +                    let search = try CharacterPickerSearch(finding: baseEmoji)
 +                    phase = .menu
-+                    try openCustomEmojiReactionPicker(messageCell: $0)
++                    try elements.addCustomEmojiReactionButton.press()
 +                    phase = .picker
 +                    let picker = try retry(withTimeout: 1.5, interval: 0.05) { try elements.characterPickerPopover }
 +                    do {
@@ -551,13 +561,13 @@ index bb6ae980..c0cebfa9 100644
 +                                return identifier == reaction.idOrEmoji
 +                            }
 +                            .orThrow(ErrorMessage("Could not find \(on ? "react" : "unreact") button"))
-+                    }
+                     }
 +    
 +                    let idx = reaction.index!
 +                    let buttons = try elements.reactButtons
 +                    guard buttons.count > idx else {
 +                        throw ErrorMessage("reactButtons count=\(buttons.count)")
-                     }
++                    }
 +    
 +                    return buttons[idx]
 +                }()
@@ -568,17 +578,17 @@ index bb6ae980..c0cebfa9 100644
 +                if on {
 +                    if try !btn.isSelected() { try btn.press() }
 +                } else {
-+                    try BBCReactionRemoval.perform(selected: { try btn.isSelected() }, press: { try btn.press() })
-+                    removalObserved = true
++                    try BBCNativeReactionSelection.perform(desired: false, selected: { try btn.isSelected() }, press: { try btn.press() })
++                    nativeStateObserved = true
                  }
              }
 -        }
 +        } catch { throw phase }
-+        return removalObserved
++        return nativeStateObserved
      }
  
      func undoSend(threadID: String, messageCell: MessageCell) throws {
-@@ -994,6 +1028,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -994,6 +1038,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
       3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
       4. threadCell.press() action hack                                       (unreliable)
       */
@@ -603,7 +613,7 @@ index bb6ae980..c0cebfa9 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1133,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1143,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -749,7 +759,7 @@ index bb6ae980..c0cebfa9 100644
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1303,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1313,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -765,7 +775,7 @@ index bb6ae980..c0cebfa9 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1781,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1791,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
@@ -776,7 +786,7 @@ index bb6ae980..c0cebfa9 100644
  
      deinit {
 diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
-index 24ae4ff3..4015f115 100644
+index 24ae4ff3..743ac9f2 100644
 --- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
 +++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
 @@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
@@ -794,12 +804,12 @@ index 24ae4ff3..4015f115 100644
  /// PlatformAPI instance per process and share it across wrapper surfaces.
 +public enum BBCNativeReactionFailure: String, Error { case resolution, preparation, selection, focus, transcript, cell, directAction, search, menu, picker, choice, apply }
 +
-+/// Removal never adds a reaction or repeats a toggle to recover missing confirmation.
-+public enum BBCReactionRemoval {
-+    public static func perform(selected: () throws -> Bool, press: () throws -> Void) throws {
-+        if try selected() { try press() }
++/// Observe the exact native button state; never repeat a toggle to recover confirmation.
++public enum BBCNativeReactionSelection {
++    public static func perform(desired: Bool, selected: () throws -> Bool, press: () throws -> Void) throws {
++        if try selected() != desired { try press() }
 +        try retry(withTimeout: 0.75, interval: 0.05) {
-+            guard try !selected() else { throw BBCNativeReactionFailure.apply }
++            guard try selected() == desired else { throw BBCNativeReactionFailure.apply }
 +        }
 +    }
 +}
@@ -863,8 +873,8 @@ index 24ae4ff3..4015f115 100644
          try await withMessagesController { try $0.undoSend(threadID: threadID, messageID: messageID) }
      }
  
-+    /// Returns true only when removal observes the exact picker button unselected.
-+    /// Adds still require BBC's database confirmation; no mutation is retried here.
++    /// Returns true only after observing the exact native button in the desired state.
++    /// Unobserved submissions still require BBC's database confirmation; no mutation is retried here.
 +    public func bbcSetReactionOnce(threadID: String, messageID: String, reaction: String, on: Bool) async throws -> Bool {
 +        return try await withMessageSendLock {
 +            return try await withMessagesController { controller in

@@ -136,17 +136,16 @@ struct BBCMessagesActions {
                         let api = try initialize(directory)
                         attempted = true
                         phase = "reaction_ui"
-                        let removalObserved = try await api.bbcSetReactionOnce(threadID: p.chat_guid, messageID: guid, reaction: nativeReaction, on: !remove)
+                        let nativeStateObserved = try await api.bbcSetReactionOnce(threadID: p.chat_guid, messageID: guid, reaction: nativeReaction, on: !remove)
                         phase = "reaction_confirmation"
-                        if remove {
-                            guard removalObserved else { throw ActionFailure.uncertain }
-                        } else {
+                        if !nativeStateObserved {
+                            guard !remove else { throw ActionFailure.uncertain }
                             try await confirm {
                                 EmojiTapback.isDesired(current: try database.reactionValue(chat: p.chat_guid, message: guid), reaction: reaction, remove: remove)
                             }
                         }
                         receipt = ["ok": true, "message_guid": guid, "chat_guid": p.chat_guid, "reaction": p.reaction!, "remove": remove,
-                                   "confirmation": removalObserved ? "native-ui" : "local-database"]
+                                   "confirmation": nativeStateObserved ? "native-ui" : "local-database"]
                     }
                 } else {
                     phase = "read_snapshot"
