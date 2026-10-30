@@ -1,16 +1,16 @@
 diff --git a/src/IMessage/Sources/IMessage/BBCNativeEmojiPickerSelection.swift b/src/IMessage/Sources/IMessage/BBCNativeEmojiPickerSelection.swift
 new file mode 100644
-index 00000000..4f101b23
+index 00000000..59ac21ab
 --- /dev/null
 +++ b/src/IMessage/Sources/IMessage/BBCNativeEmojiPickerSelection.swift
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,151 @@
 +import AppKit
 +import ApplicationServices
 +import Darwin
 +import Foundation
 +
 +/// CharacterPicker's embedded glyph can advertise AXPress without selecting
-+/// anything. Select its single-result row explicitly, then confirm exactly once.
++/// anything. Select its exact result container explicitly, then confirm exactly once.
 +public enum BBCNativeEmojiPickerSelection {
 +    public enum Failure: String, Error {
 +        case ownership, search, glyph, container, selectionWrite, selectionRead, confirmation
@@ -49,17 +49,19 @@ index 00000000..4f101b23
 +        guard emoji.count == 1, matches(glyph, emoji: emoji) else { throw Failure.glyph }
 +        guard actions(searchField)?.contains(kAXConfirmAction) == true else { throw Failure.confirmation }
 +
-+        // The direct selected child can represent an entire row. It is safe
-+        // only when that row has one actionable result: the exact glyph.
++        // The list groups items into layout rows. Its selection API addresses
++        // the selectable result group, which may be below a row wrapper.
 +        var branch = glyph
-+        var target: (container: AXUIElement, row: AXUIElement)?
++        var selectable: AXUIElement? = attribute(glyph, kAXSelectedAttribute) as? Bool != nil ? glyph : nil
++        var target: (container: AXUIElement, item: AXUIElement)?
 +        for _ in 0..<16 {
 +            guard let parent = parent(branch), pid(parent) == ownerPID, !CFEqual(parent, picker) else { break }
++            if selectable == nil, attribute(parent, kAXSelectedAttribute) as? Bool != nil { selectable = parent }
 +            if string(parent, kAXRoleAttribute) == kAXListRole,
-+               settable(parent, kAXSelectedChildrenAttribute),
-+               children(parent).contains(where: { CFEqual($0, branch) }),
-+               singleActionableGlyph(in: branch, glyph: glyph, ownerPID: ownerPID) {
-+                target = (parent, branch)
++               settable(parent, kAXSelectedChildrenAttribute), let item = selectable,
++               descends(item, from: parent, ownerPID: ownerPID),
++               singleActionableGlyph(in: item, glyph: glyph, ownerPID: ownerPID) {
++                target = (parent, item)
 +                break
 +            }
 +            branch = parent
@@ -72,14 +74,14 @@ index 00000000..4f101b23
 +        }
 +        try confirm(select: {
 +            guard AXUIElementSetAttributeValue(target.container, kAXSelectedChildrenAttribute as CFString,
-+                                              [target.row] as CFArray) == .success else { throw Failure.selectionWrite }
++                                              [target.item] as CFArray) == .success else { throw Failure.selectionWrite }
 +        }, selected: {
 +            guard let selected = attribute(target.container, kAXSelectedChildrenAttribute) as? [AXUIElement] else { return nil }
-+            return selected.count == 1 && CFEqual(selected[0], target.row)
++            return selected.count == 1 && CFEqual(selected[0], target.item)
 +        }, owned: owned, submit: {
-+            guard owned(), singleActionableGlyph(in: target.row, glyph: glyph, ownerPID: ownerPID),
++            guard owned(), singleActionableGlyph(in: target.item, glyph: glyph, ownerPID: ownerPID),
 +                  let selected = attribute(target.container, kAXSelectedChildrenAttribute) as? [AXUIElement],
-+                  selected.count == 1, CFEqual(selected[0], target.row),
++                  selected.count == 1, CFEqual(selected[0], target.item),
 +                  actions(searchField)?.contains(kAXConfirmAction) == true else { throw Failure.confirmation }
 +            guard AXUIElementPerformAction(searchField, kAXConfirmAction as CFString) == .success else { throw Failure.confirmation }
 +        })
@@ -123,8 +125,8 @@ index 00000000..4f101b23
 +        }
 +        return false
 +    }
-+    private static func singleActionableGlyph(in row: AXUIElement, glyph: AXUIElement, ownerPID: pid_t) -> Bool {
-+        var queue = [row], index = 0, actionable = [AXUIElement]()
++    private static func singleActionableGlyph(in item: AXUIElement, glyph: AXUIElement, ownerPID: pid_t) -> Bool {
++        var queue = [item], index = 0, actionable = [AXUIElement]()
 +        while index < queue.count, queue.count <= 128 {
 +            let node = queue[index]; index += 1
 +            guard pid(node) == ownerPID else { return false }
