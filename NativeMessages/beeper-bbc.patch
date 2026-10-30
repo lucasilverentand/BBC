@@ -1,9 +1,9 @@
 diff --git a/src/IMessage/Sources/IMessage/BBCNativeEmojiPickerSelection.swift b/src/IMessage/Sources/IMessage/BBCNativeEmojiPickerSelection.swift
 new file mode 100644
-index 00000000..6865b92e
+index 00000000..4f101b23
 --- /dev/null
 +++ b/src/IMessage/Sources/IMessage/BBCNativeEmojiPickerSelection.swift
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,149 @@
 +import AppKit
 +import ApplicationServices
 +import Darwin
@@ -128,14 +128,27 @@ index 00000000..6865b92e
 +        while index < queue.count, queue.count <= 128 {
 +            let node = queue[index]; index += 1
 +            guard pid(node) == ownerPID else { return false }
-+            guard let names = actions(node) else { return false }
-+            if !Set(names).isDisjoint(with: [kAXPressAction, kAXConfirmAction, kAXPickAction]) { actionable.append(node) }
 +            var raw: CFTypeRef?
-+            let status = AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &raw)
-+            if status == .success {
-+                guard let descendants = raw as? [AXUIElement], queue.count + descendants.count <= 128 else { return false }
-+                queue += descendants
-+            } else if status != .noValue && status != .attributeUnsupported { return false }
++            let childStatus = AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &raw)
++            let descendants: [AXUIElement]
++            if childStatus == .success {
++                guard let values = raw as? [AXUIElement] else { return false }
++                descendants = values
++            } else if childStatus == .noValue || childStatus == .attributeUnsupported { descendants = [] }
++            else { return false }
++            guard queue.count + descendants.count <= 128 else { return false }
++            var rawNames: CFArray?
++            let actionStatus = AXUIElementCopyActionNames(node, &rawNames)
++            if actionStatus == .success, let names = rawNames as? [String] {
++                if !Set(names).isDisjoint(with: [kAXPressAction, kAXConfirmAction, kAXPickAction]) { actionable.append(node) }
++            } else {
++                // Embedded CharacterPicker layout wrappers return AXFailure for
++                // action names. Only these zero/one-child groups are structural;
++                // the glyph and every interactive control still need readable actions.
++                guard actionStatus == .failure, string(node, kAXRoleAttribute) == kAXGroupRole,
++                      descendants.count <= 1, !CFEqual(node, glyph) else { return false }
++            }
++            queue += descendants
 +        }
 +        return index == queue.count && actionable.count == 1 && CFEqual(actionable[0], glyph)
 +    }
