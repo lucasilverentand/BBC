@@ -130,7 +130,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..5a680ae5 100644
+index bb6ae980..dd8a0a88 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -451,7 +451,7 @@ index bb6ae980..5a680ae5 100644
              guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
                  guard let cell = try messageCell.overlay
                          ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
-@@ -750,85 +776,162 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -750,85 +776,163 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -558,12 +558,13 @@ index bb6ae980..5a680ae5 100644
 +                    let picker = try retry(withTimeout: 1.5, interval: 0.05) { try elements.characterPickerPopover }
 +                    let searchField = try elements.characterPickerSearchField
 +                    try searchField.value(assign: search.query)
-+                    func ownsSearch() -> Bool {
++                    func unchangedSearch() -> Bool {
 +                        (try? searchField.pid()) == self.app.processIdentifier &&
-+                            ((try? searchField.value()) as? String) == search.query && self.elements.isVisibleCharacterPicker(picker)
++                            ((try? searchField.value()) as? String) == search.query
 +                    }
++                    func ownsSearch() -> Bool { unchangedSearch() && self.elements.isVisibleCharacterPicker(picker) }
 +                    defer { if !observeOnly, ownsSearch() { try? picker.cancel() } }
-+                    try BBCNativeEmojiActivation.waitForSearch(owned: ownsSearch)
++                    try BBCNativeEmojiActivation.waitForSearch(owned: unchangedSearch)
 +                    phase = .choice
 +                    let choice = try retry(withTimeout: 2, interval: 0.1) {
 +                        let choices = picker.recursiveChildren().compactMap { element -> (element: Accessibility.Element, actions: [String], rank: Int)? in
@@ -601,7 +602,7 @@ index bb6ae980..5a680ae5 100644
 +                        (try? node.supportedActions())?.first { $0.name.value == "AXConfirm" }
 +                    }.first : nil
 +                    let rawRole = (try? choice.element.role()) ?? "unknown"
-+                    let role = ["AXButton", "AXCell", "AXStaticText", "AXImage", "AXTextField"].contains(rawRole) ? rawRole : "other"
++                    let role = ["AXUnknown", "AXButton", "AXCell", "AXStaticText", "AXImage", "AXTextField"].contains(rawRole) ? rawRole : "other"
 +                    let logger = os.Logger(subsystem: "club.bluebubble.transport", category: "NativeEmojiPicker")
 +                    if observeOnly {
 +                        logger.notice("Emoji picker ready for native observation; no activation dispatched")
@@ -686,7 +687,7 @@ index bb6ae980..5a680ae5 100644
      }
  
      func undoSend(threadID: String, messageCell: MessageCell) throws {
-@@ -994,6 +1097,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -994,6 +1098,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
       3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
       4. threadCell.press() action hack                                       (unreliable)
       */
@@ -711,7 +712,7 @@ index bb6ae980..5a680ae5 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1202,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1203,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -857,7 +858,7 @@ index bb6ae980..5a680ae5 100644
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1372,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1373,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -873,7 +874,7 @@ index bb6ae980..5a680ae5 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1850,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1851,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
