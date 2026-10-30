@@ -24,7 +24,7 @@ final class LocalReaderTests: XCTestCase {
         INSERT INTO chat_handle_join VALUES(1,1);
         INSERT INTO message VALUES('\(root)','root',1,0,1,'iMessage',NULL,0,NULL,NULL);
         INSERT INTO message VALUES('\(reply)','reply',1,0,2,'iMessage','p:3/\(root)',0,NULL,NULL);
-        INSERT INTO message VALUES('reaction','',1,0,3,'iMessage',NULL,2001,'p:0/\(reply)',NULL);
+        INSERT INTO message VALUES('reaction','',1,0,3,'iMessage',NULL,2001,'bp:\(reply)',NULL);
         INSERT INTO chat_message_join VALUES(1,1),(1,2),(1,3);
         INSERT INTO attachment VALUES('attachment','image/png','public.png',42,0);
         INSERT INTO message_attachment_join VALUES(2,1);
@@ -57,6 +57,7 @@ final class LocalReaderTests: XCTestCase {
         XCTAssertEqual(events.count, 1); XCTAssertEqual(events[0].object?["reacted_to_guid"]?.string, reply)
         XCTAssertEqual(events[0].object?["is_reaction"]?.bool, true)
         XCTAssertEqual(events[0].object?["reaction_emoji"]?.string, "🎉")
+        XCTAssertEqual(events[0].object?["reacted_to_native_guid"]?.string, "bp:\(reply)")
         XCTAssertThrowsError(try database.page(["since_rowid": .number(-1)]))
         XCTAssertThrowsError(try database.page(["limit": .number(201)]))
         XCTAssertEqual(sqlite3_exec(connection, """

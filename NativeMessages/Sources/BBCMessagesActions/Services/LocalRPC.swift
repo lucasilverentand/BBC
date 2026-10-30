@@ -145,7 +145,8 @@ extension MessagesDatabase {
                 "is_audio_message": .bool(row[14] == "1"),
                 "reaction_emoji": row[12].isEmpty ? .null : .string(row[12]),
                 "is_reaction": .bool((2000..<4000).contains(reaction)), "reaction_type": .number(Double(reaction)),
-                "is_reaction_add": .bool((2000..<3000).contains(reaction)), "reacted_to_guid": normalizedGUID(row[10]).map(BBCJSONValue.string) ?? .null])
+                "is_reaction_add": .bool((2000..<3000).contains(reaction)),
+                "reacted_to_native_guid": row[10].isEmpty ? .null : .string(row[10]), "reacted_to_guid": normalizedGUID(row[10]).map(BBCJSONValue.string) ?? .null])
         }
         return .object(["messages": .array(messages), "next_rowid": .number(values.last.flatMap { Double($0[0]) } ?? after)])
     }
@@ -157,10 +158,14 @@ extension MessagesDatabase {
         return .object(["guid": .string(guid), "chat_guid": .string(chat), "sent": .bool(r[0][0] == "1"), "delivered": .bool(r[0][1] == "1"), "read": .bool(r[0][2] == "1"), "error": .number(Double(r[0][3]) ?? 0), "confirmation": .string("local-database")])
     }
     func normalizedGUID(_ raw: String) -> String? {
-        if let guid = UUID(uuidString: raw) { return guid.uuidString }
-        let parts = raw.split(separator: "/")
-        guard parts.count == 2, parts[0].hasPrefix("p:"), Int(parts[0].dropFirst(2)).map({ $0 >= 0 }) == true else { return nil }
-        return UUID(uuidString: String(parts[1]))?.uuidString
+        var reference = raw
+        if reference.hasPrefix("p:") {
+            let parts = reference.split(separator: "/", omittingEmptySubsequences: false)
+            guard parts.count == 2, Int(parts[0].dropFirst(2)).map({ $0 >= 0 }) == true else { return nil }
+            reference = String(parts[1])
+        }
+        if reference.hasPrefix("bp:") { reference = String(reference.dropFirst(3)) }
+        return UUID(uuidString: reference)?.uuidString
     }
 }
 private extension Data {
