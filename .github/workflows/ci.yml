@@ -23,3 +23,9 @@ jobs:
       - run: bash script/prepare_icon.sh
       - run: bash script/prepare_native.sh
       - run: python3 script/test_swift.py NativeMessages
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bbc-native-validation
+          path: NativeMessages/.build/debug/BlueBubbleClub
+          if-no-files-found: error
+          retention-days: 1

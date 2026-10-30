@@ -46,14 +46,27 @@ final class RichMessagingTests: XCTestCase {
             INSERT INTO chat VALUES('\(chat)');
             """, nil, nil, nil), SQLITE_OK)
         let database = try MessagesDatabase(url: file)
-        func event(_ type: Int, _ emoji: String, own: Int = 1, part: Int = 0) {
-            XCTAssertEqual(sqlite3_exec(connection, "INSERT INTO message VALUES('iMessage',\(own),\(type),'p:\(part)/\(guid)','\(emoji)'); INSERT INTO chat_message_join VALUES(1,last_insert_rowid())", nil, nil, nil), SQLITE_OK)
+        func event(_ type: Int, _ emoji: String, own: Int = 1, part: Int = 0, reference: String? = nil) {
+            let target = reference ?? "p:\(part)/\(guid)"
+            XCTAssertEqual(sqlite3_exec(connection, "INSERT INTO message VALUES('iMessage',\(own),\(type),'\(target)','\(emoji)'); INSERT INTO chat_message_join VALUES(1,last_insert_rowid())", nil, nil, nil), SQLITE_OK)
         }
         event(2006, "👍🏽"); XCTAssertEqual(try database.reactionValue(chat: chat, message: guid), "👍🏽")
         event(2006, "🎉", own: 0); event(2006, "🔥", part: 1)
         XCTAssertEqual(try database.reactionValue(chat: chat, message: guid), "👍🏽")
         event(3006, "👍🏽"); XCTAssertNil(try database.reactionValue(chat: chat, message: guid))
         event(2001, ""); XCTAssertEqual(try database.reaction(chat: chat, message: guid), 1)
+        for reference in [guid, "p:0/\(guid)", "bp:\(guid)", "p:0/bp:\(guid)"] {
+            event(2006, "🎉", reference: reference)
+            XCTAssertEqual(try database.reactionValue(chat: chat, message: guid), "🎉", reference)
+            event(2006, "🔥", own: 0, reference: reference)
+            XCTAssertEqual(try database.reactionValue(chat: chat, message: guid), "🎉", reference)
+            event(3006, "🎉", reference: reference)
+            XCTAssertNil(try database.reactionValue(chat: chat, message: guid), reference)
+            XCTAssertEqual(database.normalizedGUID(reference), guid)
+        }
+        for reference in ["bp:garbage", "bp:bp:\(guid)", "p:-1/bp:\(guid)", "p:0/bp:\(guid)/extra", "p:0/", "bp:"] {
+            XCTAssertNil(database.normalizedGUID(reference), reference)
+        }
     }
 
     func testDownloadUsesExactAttachmentTupleAndBoundedChunksAndMediaReceiptIsExact() throws {

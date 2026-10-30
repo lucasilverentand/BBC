@@ -87,10 +87,10 @@ final class MessagesDatabase {
             SELECT m.associated_message_type, \(emoji) FROM message m
             JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id
             WHERE c.guid=?1 AND m.is_from_me=1 AND m.service='iMessage'
-              AND m.associated_message_guid IN (?2, ?3)
+              AND m.associated_message_guid IN (?2, ?3, ?4, ?5)
               AND (m.associated_message_type BETWEEN 2000 AND 2007 OR m.associated_message_type BETWEEN 3000 AND 3007)
             ORDER BY m.ROWID DESC LIMIT 1
-            """, [chat, message, "p:0/" + message])
+            """, [chat, message, "p:0/" + message, "bp:" + message, "p:0/bp:" + message])
         guard let row = values.first, let type = Int(row[0]) else { return nil }
         if (2000...2005).contains(type) { return NativeRequest.reactions[type - 2000] }
         return type == 2006 && EmojiTapback.valid(row[1]) ? row[1] : nil
