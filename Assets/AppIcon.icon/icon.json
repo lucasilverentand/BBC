@@ -1,61 +1,68 @@
 {
-  "fill": {
-    "linear-gradient": [
-      "srgb:0.05,0.36,0.9,1",
-      "srgb:0.24,0.68,1,1"
+  "features" : [
+    "refractivity",
+    "specular-location"
+  ],
+  "fill" : {
+    "linear-gradient" : [
+      "srgb:0.05000,0.36000,0.90000,1.00000",
+      "srgb:0.24000,0.68000,1.00000,1.00000"
     ]
   },
-  "groups": [
+  "groups" : [
     {
-      "name": "iMessage",
-      "layers": [
+      "blur-material" : 0.4,
+      "layers" : [
         {
-          "image-name": "Message.png",
-          "name": "Apple white filled message",
-          "glass": true
+          "fill" : "automatic",
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "Message.png",
+          "name" : "Apple white filled message"
         }
       ],
-      "shadow": {
-        "kind": "neutral",
-        "opacity": 0.65
+      "name" : "iMessage",
+      "refractivity" : {
+        "depth" : 0.99875,
+        "enabled" : true,
+        "strength" : -0.235625
       },
-      "translucency": {
-        "enabled": true,
-        "value": 0.4
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.65
+      },
+      "specular" : "outside",
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.9
       }
     },
     {
-      "name": "Clouds",
-      "layers": [
+      "layers" : [
         {
-          "image-name": "Clouds.png",
-          "name": "Clouds",
-          "glass": false,
-          "position-specializations": [
-            {
-              "idiom": "square",
-              "value": {
-                "scale": 1,
-                "translation-in-points": [
-                  0,
-                  180
-                ]
-              }
-            }
-          ]
+          "image-name" : "getty-images-dZH5qcz-DhI-unsplash.jpg",
+          "name" : "getty-images-dZH5qcz-DhI-unsplash",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              748,
+              -151
+            ]
+          }
         }
       ],
-      "shadow": {
-        "kind": "neutral",
-        "opacity": 0
+      "name" : "Clouds",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0
       },
-      "translucency": {
-        "enabled": false,
-        "value": 0
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
       }
     }
   ],
-  "supported-platforms": {
-    "squares": "shared"
+  "supported-platforms" : {
+    "squares" : "shared"
   }
 }

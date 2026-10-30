@@ -23,7 +23,7 @@ BBC runs alongside Messages in your signed-in macOS session. One Swift app hosts
 
 ## Get started
 
-Requires macOS 26+, Swift 6.2+ and an Apple Development signing identity.
+Requires macOS 26+, Xcode 27.2+ and an Apple Development signing identity.
 
 ```sh
 git clone https://github.com/lucasilverentand/BBC.git
