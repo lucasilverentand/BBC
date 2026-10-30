@@ -116,7 +116,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..423be4a1 100644
+index bb6ae980..f35c7f1b 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -418,7 +418,7 @@ index bb6ae980..423be4a1 100644
              guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
                  guard let cell = try messageCell.overlay
                          ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
-@@ -750,85 +774,151 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -750,85 +774,174 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -551,7 +551,7 @@ index bb6ae980..423be4a1 100644
 +                    var ancestors = [Accessibility.Element](), cursor = try? choice.element.parent()
 +                    var reachedPicker = false
 +                    let pickerPID = try picker.pid()
-+                    for _ in 0..<8 {
++                    for _ in 0..<16 {
 +                        guard let node = cursor, (try? node.pid()) == pickerPID else { break }
 +                        ancestors.append(node)
 +                        if node == picker { reachedPicker = true; break }
@@ -561,7 +561,7 @@ index bb6ae980..423be4a1 100644
 +                        (try? node.supportedActions())?.first { $0.name.value == "AXConfirm" }
 +                    }.first : nil
 +                    let rawRole = (try? choice.element.role()) ?? "unknown"
-+                    let role = ["AXButton", "AXCell", "AXStaticText", "AXImage", "AXTextField"].contains(rawRole) ? rawRole : "other"
++                    let role = ["AXUnknown", "AXButton", "AXCell", "AXStaticText", "AXImage", "AXTextField"].contains(rawRole) ? rawRole : "other"
 +                    let logger = os.Logger(subsystem: "club.bluebubble.transport", category: "NativeEmojiPicker")
 +                    let hasConfirm = choice.actions.contains("AXConfirm"), hasPick = choice.actions.contains("AXPick")
 +                    let hasPress = choice.actions.contains("AXPress"), hasParentConfirm = confirmer != nil
@@ -584,7 +584,30 @@ index bb6ae980..423be4a1 100644
 +                        try choice.element.action(.init(name))()
 +                    }, selected: {
 +                        ownsSearch() ? try? choice.element.isSelected() : nil
-+                    }, confirmSelection: confirmation)
++                    }, confirmSelection: confirmation, role: rawRole, processClick: {
++                        guard reachedPicker, ownsSearch(), Self.isOwnUserProcess(self.app),
++                              pickerPID == self.app.processIdentifier,
++                              (try? choice.element.pid()) == pickerPID else { throw BBCNativeReactionFailure.choice }
++                        let point = try BBCNativeEmojiClickGeometry.point(glyph: choice.element.frame(), picker: picker.frame())
++                        // Hit-test again immediately before dispatch. A shifted picker
++                        // must never turn a saved coordinate into a different action.
++                        var hit = elements.app.elementAtScreenPoint(point), exactHit = false
++                        for _ in 0..<8 {
++                            guard let node = hit, (try? node.pid()) == pickerPID else { break }
++                            if node == choice.element { exactHit = true; break }
++                            hit = try? node.parent()
++                        }
++                        guard exactHit, ownsSearch(), let source = CGEventSource(stateID: .privateState),
++                              let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
++                              let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
++                        else { throw BBCNativeReactionFailure.choice }
++                        for event in [down, up] {
++                            event.flags = []
++                            event.setIntegerValueField(.mouseEventClickState, value: 1)
++                            // App-local events only: no global event tap or cursor movement.
++                            event.postToPid(pickerPID)
++                        }
++                    })
 +                    let closingDeadline = Date().addingTimeInterval(0.75)
 +                    while ownsSearch(), Date() < closingDeadline { Thread.sleep(forTimeInterval: 0.05) }
 +                    let stillOpen = ownsSearch()
@@ -642,7 +665,7 @@ index bb6ae980..423be4a1 100644
      }
  
      func undoSend(threadID: String, messageCell: MessageCell) throws {
-@@ -994,6 +1084,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -994,6 +1107,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
       3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
       4. threadCell.press() action hack                                       (unreliable)
       */
@@ -667,7 +690,7 @@ index bb6ae980..423be4a1 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1189,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1212,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -813,7 +836,7 @@ index bb6ae980..423be4a1 100644
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1359,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1382,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -829,7 +852,7 @@ index bb6ae980..423be4a1 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1837,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1860,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
@@ -840,7 +863,7 @@ index bb6ae980..423be4a1 100644
  
      deinit {
 diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
-index 24ae4ff3..8b196c46 100644
+index 24ae4ff3..e3350f2e 100644
 --- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
 +++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
 @@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
@@ -852,7 +875,7 @@ index 24ae4ff3..8b196c46 100644
          state.database = db
          return db
      }
-@@ -63,6 +63,92 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
+@@ -63,6 +63,110 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
  ///
  /// `IMessageHost` owns singleton process state, so callers should create only one
  /// PlatformAPI instance per process and share it across wrapper surfaces.
@@ -868,15 +891,22 @@ index 24ae4ff3..8b196c46 100644
 +    }
 +}
 +
-+/// Use only advertised actions on the exact glyph; never send a global Return.
++/// Activate the exact owned glyph once; never recover by repeating a mutation.
 +public enum BBCNativeEmojiActivation {
 +    public static func preferredAction(_ supported: [String]) -> String? {
 +        ["AXConfirm", "AXPick", "AXPress"].first { supported.contains($0) }
 +    }
 +
 +    public static func perform(supported: [String], activate: (String) throws -> Void,
-+                               selected: () -> Bool?, confirmSelection: (() throws -> Void)?) throws -> String {
++                               selected: () -> Bool?, confirmSelection: (() throws -> Void)?,
++                               role: String? = nil, processClick: (() throws -> Void)? = nil) throws -> String {
 +        guard let action = preferredAction(supported) else { throw BBCNativeReactionFailure.choice }
++        // Tahoe's embedded character results expose a no-op AXPress. Choose
++        // this route before dispatch; never fall back after an uncertain press.
++        if role == "AXUnknown", action == "AXPress", let processClick {
++            try processClick()
++            return "process-click"
++        }
 +        try activate(action)
 +        if action == "AXPress", let confirmSelection {
 +            let deadline = Date().addingTimeInterval(0.75)
@@ -887,6 +917,17 @@ index 24ae4ff3..8b196c46 100644
 +            } while Date() < deadline
 +        }
 +        return action
++    }
++}
++
++/// Reject stale, clipped or unreasonable glyph frames; negative screen origins are valid.
++public enum BBCNativeEmojiClickGeometry {
++    public static func point(glyph: CGRect, picker: CGRect) throws -> CGPoint {
++        let values = [glyph.minX, glyph.minY, glyph.width, glyph.height, picker.minX, picker.minY, picker.width, picker.height]
++        guard values.allSatisfy({ $0.isFinite }), glyph.width > 0, glyph.height > 0,
++              glyph.width <= 128, glyph.height <= 128, picker.width > 0, picker.height > 0,
++              picker.contains(glyph) else { throw BBCNativeReactionFailure.choice }
++        return CGPoint(x: glyph.midX, y: glyph.midY)
 +    }
 +}
 +
@@ -945,7 +986,7 @@ index 24ae4ff3..8b196c46 100644
  public final class PlatformAPI {
      private static let activeInstance = Protected<ObjectIdentifier?>()
  
-@@ -384,6 +470,48 @@ public final class PlatformAPI {
+@@ -384,6 +488,48 @@ public final class PlatformAPI {
          try await withMessagesController { try $0.undoSend(threadID: threadID, messageID: messageID) }
      }
  
