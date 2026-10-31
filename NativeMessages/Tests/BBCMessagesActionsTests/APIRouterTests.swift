@@ -80,4 +80,25 @@ import BBCClient
             XCTAssertEqual(rows[0].object?["thread_root_guid"]?.string, "root")
         }
     }
+
+    func testUIResetRequiresAnOperationAndReplaysOnlyItsReceipt() async throws {
+        try await fixture { keys, secret, _ in
+            var calls = 0
+            let router = APIRouter(keys: keys) { request in
+                calls += 1
+                XCTAssertEqual(request.object?["method"]?.string, "ui.reset")
+                XCTAssertEqual(request.object?["params"], .null)
+                return .object(["ok": .bool(true), "ui_state": .string("clean")])
+            }
+            var headers = ["authorization": "Bearer " + secret]
+            let missing = await router.handle(method: "POST", path: "/v1/ui/reset", headers: headers, body: Data("{}".utf8))
+            XCTAssertEqual(missing.status, 400); XCTAssertEqual(calls, 0)
+            headers["idempotency-key"] = UUID().uuidString
+            let first = await router.handle(method: "POST", path: "/v1/ui/reset", headers: headers, body: Data("{}".utf8))
+            let replay = await router.handle(method: "POST", path: "/v1/ui/reset", headers: headers, body: Data("{}".utf8))
+            XCTAssertEqual(first.value, replay.value); XCTAssertEqual(calls, 1)
+            let discard = await router.handle(method: "POST", path: "/v1/ui/reset", headers: headers, body: Data(#"{"discard_draft":true}"#.utf8))
+            XCTAssertEqual(discard.status, 400); XCTAssertEqual(calls, 1)
+        }
+    }
 }

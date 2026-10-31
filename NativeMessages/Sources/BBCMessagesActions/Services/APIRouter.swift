@@ -31,13 +31,14 @@ import BBCClient
                 return .init(status: 201, value: try await store.create(body, filename: filename).packet)
             }
             let request = try JSONDecoder().decode(BBCJSONValue.self, from: body)
-            let endpointMethods = ["/v1/messages": "send", "/v1/messages/after": "messages.after", "/v1/messages/status": "messages.status", "/v1/replies": "reply", "/v1/links": "link", "/v1/media/download": "media.download", "/v1/tapbacks": "tapback", "/v1/read": "read", "/v1/read/status": "read.status", "/v1/typing/start": "typing.start", "/v1/typing/stop": "typing.stop", "/v1/media/visual": "media.visual", "/v1/media/transcribe": "media.transcribe"]
+            let endpointMethods = ["/v1/ui/reset": "ui.reset", "/v1/messages": "send", "/v1/messages/after": "messages.after", "/v1/messages/status": "messages.status", "/v1/replies": "reply", "/v1/links": "link", "/v1/media/download": "media.download", "/v1/tapbacks": "tapback", "/v1/read": "read", "/v1/read/status": "read.status", "/v1/typing/start": "typing.start", "/v1/typing/stop": "typing.stop", "/v1/media/visual": "media.visual", "/v1/media/transcribe": "media.transcribe"]
             guard let operationMethod = endpointMethods[path], var params = request.object else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
             let observational = ["messages.after", "messages.status", "media.download", "read.status", "media.visual", "media.transcribe"].contains(operationMethod)
             if operationMethod == "send" {
                 params["service"] = .string("imessage"); params["allow_sms_fallback"] = .bool(false)
             }
-            let payload: BBCJSONValue = .object(["method": .string(operationMethod), "params": .object(params)])
+            if operationMethod == "ui.reset", !params.isEmpty { throw ActionFailure.invalid }
+            let payload: BBCJSONValue = .object(["method": .string(operationMethod), "params": operationMethod == "ui.reset" ? .null : .object(params)])
             if observational { return .init(status: 200, value: try await execute(payload)) }
             guard let raw = headers["idempotency-key"], let operationID = UUID(uuidString: raw) else { return .init(status: 400, value: .object(["error": .string("uuid_idempotency_key_required")])) }
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]

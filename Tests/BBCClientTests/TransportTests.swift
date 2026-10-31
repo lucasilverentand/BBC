@@ -47,6 +47,13 @@ final class TransportTests: XCTestCase {
             XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("calls"), encoding: .utf8), "1")
         }
     }
+    func testUIResetUsesNativeWorkerWithoutLegacyDispatch() async throws {
+        try await withHelper("assert request['method'] == 'ui.reset'\nassert request['params'] is None\nprint(json.dumps({'ok':True,'ui_state':'clean'}))") { helper, directory in
+            let client = BBCClient(executable: directory.appendingPathComponent("must-not-run"), nativeExecutable: helper)
+            let result = try await client.request(.object(["method": .string("ui.reset"), "params": .null]))
+            XCTAssertEqual(result.object?["ui_state"]?.string, "clean")
+        }
+    }
     func testOversizedReceiptIsRejected() async throws {
         try await withHelper("print('x' * 2000001)") { helper, _ in
             do { _ = try await BBCClient(executable: helper).request(.object(["method": .string("send")])) ; XCTFail("Expected bound") }

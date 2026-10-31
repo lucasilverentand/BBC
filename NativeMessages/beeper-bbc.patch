@@ -29,7 +29,7 @@ index 14b5d962..1e372ee8 100644
      static func resetPrompts() {
          // getUserDefaults(bundleID: messagesBundleID)?.set(true, forKey: "kHasSetupHashtagImages") // unknown
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift b/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
-index 936ae9fc..dfb997cd 100644
+index 936ae9fc..e1f61283 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
 @@ -270,29 +270,6 @@ final class MessagesAppElements {
@@ -62,7 +62,7 @@ index 936ae9fc..dfb997cd 100644
              }
              //            try? MessagesController.resizeWindowToMaxHeight(mainWindow)
              // clearCachedElements()
-@@ -498,6 +475,13 @@ final class MessagesAppElements {
+@@ -498,6 +475,23 @@ final class MessagesAppElements {
          }
      }
  
@@ -71,6 +71,16 @@ index 936ae9fc..dfb997cd 100644
 +    func isVisibleCharacterPicker(_ popover: Accessibility.Element) -> Bool {
 +        guard (try? popover.pid()) == runningApp.processIdentifier else { return false }
 +        return (try? characterPickerPopoverLocator.detachedPopover()) == popover
++    }
++
++    var visibleCharacterPicker: Accessibility.Element? {
++        get throws { try characterPickerPopoverLocator.detachedPopover() }
++    }
++
++    var currentTapbackPicker: Accessibility.Element? {
++        get throws {
++            try mainWindow.recursiveChildren().first { (try? $0.identifier()) == "TapbackPickerCollectionView" }
++        }
 +    }
 +
      /// The search field within the emoji picker popover.
@@ -130,7 +140,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..dd8a0a88 100644
+index bb6ae980..e17f67a6 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -370,7 +380,20 @@ index bb6ae980..dd8a0a88 100644
          }
      }
  
-@@ -510,14 +519,16 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -468,10 +477,12 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+     }
+ 
+     private var afterAutomationTask: DispatchWorkItem?
++    private var bbcSynchronousCleanup = false
+ 
+     private static let queue = DispatchQueue(label: "messages-controller-queue")
+ 
+     private func scheduleCancelReplyTranscriptView() {
++        guard !bbcSynchronousCleanup else { return }
+         afterAutomationTask = DispatchWorkItem { [self] in
+             activityLock.lock()
+             defer { activityLock.unlock() }
+@@ -510,14 +521,16 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -389,7 +412,7 @@ index bb6ae980..dd8a0a88 100644
      }
  
      private func threadCellAction(threadCell: Accessibility.Element, namePrefix: String) throws -> Accessibility.Action? {
-@@ -591,14 +602,14 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -591,14 +604,14 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      // performs `perform` while the Messages window is unhidden
      private func withActivation(
@@ -406,7 +429,7 @@ index bb6ae980..dd8a0a88 100644
          }
  
          try perform()
-@@ -672,7 +683,7 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -672,7 +685,7 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          log.debug("reveal: 5/5 done, proceeding with grabbing the cell")
      }
  
@@ -415,7 +438,7 @@ index bb6ae980..dd8a0a88 100644
          log.debug("withMessageCell (messageCell=\(messageCell))")
  
          let url = try MessagesDeepLink.message(
-@@ -686,8 +697,21 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -686,8 +699,21 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
              try? closeReplyTranscriptView(wait: false)
          }
  
@@ -439,7 +462,7 @@ index bb6ae980..dd8a0a88 100644
  
              // we don't close transcript view here because when reacting, closing it will undo the reaction
              // defer {
-@@ -696,9 +720,11 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -696,9 +722,11 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
              //         closeReplyTranscriptView(wait: true)
              //     }
              // }
@@ -451,7 +474,7 @@ index bb6ae980..dd8a0a88 100644
              guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
                  guard let cell = try messageCell.overlay
                          ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
-@@ -750,85 +776,163 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -750,85 +778,163 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -660,13 +683,13 @@ index bb6ae980..dd8a0a88 100644
 +                                return identifier == reaction.idOrEmoji
 +                            }
 +                            .orThrow(ErrorMessage("Could not find \(on ? "react" : "unreact") button"))
-+                    }
+                     }
 +    
 +                    let idx = reaction.index!
 +                    let buttons = try elements.reactButtons
 +                    guard buttons.count > idx else {
 +                        throw ErrorMessage("reactButtons count=\(buttons.count)")
-                     }
++                    }
 +    
 +                    return buttons[idx]
 +                }()
@@ -687,7 +710,7 @@ index bb6ae980..dd8a0a88 100644
      }
  
      func undoSend(threadID: String, messageCell: MessageCell) throws {
-@@ -994,6 +1098,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -994,6 +1100,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
       3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
       4. threadCell.press() action hack                                       (unreliable)
       */
@@ -712,10 +735,70 @@ index bb6ae980..dd8a0a88 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1203,145 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1205,208 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
++    private var bbcOwnedComposer: (field: Accessibility.Element, window: Accessibility.Element, row: Accessibility.Element, text: String)?
++
++    private func bbcAssignOwnedText(_ field: Accessibility.Element, text: String) throws {
++        guard try messageFieldValue(field).isEmpty,
++              let row = elements.selectedThreadCell else { throw BBCNativeResetFailure.draft }
++        bbcOwnedComposer = (field, try elements.mainWindow, row, text)
++        try assignToMessageField(field, text: text)
++    }
++
++    /// A reset never types, sends, chooses a reaction or discards a personal draft.
++    func bbcResetUI() throws {
++        activityLock.lock()
++        defer { activityLock.unlock() }
++        bbcSynchronousCleanup = true
++        afterAutomationTask?.cancel()
++        afterAutomationTask = nil
++        guard Self.isOwnUserProcess(app), try elements.mainWindow.pid() == app.processIdentifier,
++              (try? elements.alertSheet) == nil else { throw BBCNativeResetFailure.window }
++        if let owner = bbcOwnedComposer {
++            try BBCNativeOwnedComposer.clear(expected: owner.text, owns: {
++                try self.elements.mainWindow == owner.window && self.elements.messageBodyField == owner.field && self.elements.selectedThreadCell == owner.row
++            }, read: { try self.messageFieldValue(owner.field) }, clear: { try owner.field.value(assign: "") })
++            bbcOwnedComposer = nil
++        }
++        func emptyComposer() throws {
++            if let field = try? elements.messageBodyField {
++                guard let draft = try? messageFieldValue(field) else { throw BBCNativeResetFailure.editor }
++                guard draft.isEmpty else { throw BBCNativeResetFailure.draft }
++            } else {
++                guard (try? elements.conversationsList.selectedChildren.count()) == 0 else { throw BBCNativeResetFailure.editor }
++            }
++        }
++        try emptyComposer()
++        if let picker = try elements.visibleCharacterPicker {
++            try BBCNativeUICycle.dismiss(visible: { try self.elements.visibleCharacterPicker == picker }) {
++                try emptyComposer()
++                try picker.cancel()
++            }
++        }
++        if let bar = try elements.currentTapbackPicker {
++            let cell = try MessagesAppElements.firstSelectedMessageCell(in: elements.transcriptView)
++            guard let cell, try cell.pid() == app.processIdentifier,
++                  try cell.supportedActions().contains(where: { $0.name.value == "AXCancel" }) else { throw BBCNativeResetFailure.picker }
++            try BBCNativeUICycle.dismiss(visible: { try self.elements.currentTapbackPicker == bar }) {
++                try emptyComposer()
++                try cell.cancel()
++            }
++        }
++        if let reply = try? elements.replyTranscriptView {
++            try BBCNativeUICycle.dismiss(visible: { (try? self.elements.replyTranscriptView) == reply }) {
++                try emptyComposer()
++                try reply.cancel()
++            }
++        }
++        try emptyComposer()
++        guard try elements.visibleCharacterPicker == nil,
++              try elements.currentTapbackPicker == nil,
++              (try? elements.replyTranscriptView) == nil else { throw BBCNativeResetFailure.verification }
++    }
++
 +    /// Exactly one Return. Before-send failures are distinct from an uncertain Return.
 +    func bbcReplyOnce(threadID: String, messageID: String, text: String) throws {
 +        var phase = BBCNativeReplyFailure.resolution
@@ -766,7 +849,7 @@ index bb6ae980..dd8a0a88 100644
 +                phase = .replyDraft
 +                guard try messageFieldValue(field).isEmpty else { throw phase }
 +                phase = .assignment
-+                try assignToMessageField(field, text: text)
++                try bbcAssignOwnedText(field, text: text)
 +                phase = .verification
 +                guard try messageFieldValue(field) == text else { throw phase }
 +                focusMessageField(field)
@@ -795,7 +878,7 @@ index bb6ae980..dd8a0a88 100644
 +            guard try messageFieldValue(field).isEmpty else { throw BBCNativeReplyFailure.existingDraft }
 +            let selectedRow = elements.selectedThreadCell
 +            let selectedTitle = try elements.mainWindow.title()
-+            try assignToMessageField(field, text: url)
++            try bbcAssignOwnedText(field, text: url)
 +            guard try messageFieldValue(field) == url else { throw BBCNativeReplyFailure.verification }
 +            guard selectedRow != nil, elements.selectedThreadCell == selectedRow,
 +                  try elements.mainWindow.title() == selectedTitle else { throw BBCNativeReplyFailure.selection }
@@ -837,28 +920,31 @@ index bb6ae980..dd8a0a88 100644
 +            phase = .selectedRow
 +            let row = try elements.selectedThreadCell.orThrow(phase)
 +            phase = .navigation
-+            try openDeepLink(try MessagesDeepLink(threadID: threadID, body: " ").url())
++            // Own the existing empty field before writing. A second deep link
++            // can replace the field/selection and strand the placeholder.
++            bbcTypingOwner = (threadID,targetField,row)
++            try assignToMessageField(targetField, text: " ")
 +            phase = .verification
-+            try assertSelectedThread(threadID: threadID)
 +            let ownedField = try elements.messageBodyField
-+            guard elements.selectedThreadCell == row, try messageFieldValue(ownedField) == " " else { throw phase }
-+            bbcTypingOwner = (threadID,ownedField,row)
++            guard elements.selectedThreadCell == row, ownedField == targetField,
++                  try messageFieldValue(ownedField) == " " else { throw phase }
++            focusMessageField(ownedField)
 +        } catch { throw phase }
 +    }
 +
 +    /// Never navigate or clear another chat or text edited by the operator.
 +    func bbcTypingStop(threadID: String) throws {
 +        guard let owner = bbcTypingOwner, owner.chat == threadID else { return }
-+        defer { bbcTypingOwner = nil }
-+        guard elements.selectedThreadCell == owner.row,
-+              try elements.messageBodyField == owner.field else { return }
-+        if try messageFieldValue(owner.field) == " " { try owner.field.value(assign: "") }
++        try BBCNativeOwnedComposer.clear(expected: " ", owns: {
++            try self.elements.selectedThreadCell == owner.row && self.elements.messageBodyField == owner.field
++        }, read: { try self.messageFieldValue(owner.field) }, clear: { try owner.field.value(assign: "") })
++        bbcTypingOwner = nil
 +    }
 +
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1373,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1438,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -874,7 +960,7 @@ index bb6ae980..dd8a0a88 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1851,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1916,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
@@ -885,7 +971,7 @@ index bb6ae980..dd8a0a88 100644
  
      deinit {
 diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
-index 24ae4ff3..e7b7ac34 100644
+index 24ae4ff3..c331eb02 100644
 --- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
 +++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
 @@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
@@ -897,7 +983,7 @@ index 24ae4ff3..e7b7ac34 100644
          state.database = db
          return db
      }
-@@ -63,6 +63,103 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
+@@ -63,6 +63,152 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
  ///
  /// `IMessageHost` owns singleton process state, so callers should create only one
  /// PlatformAPI instance per process and share it across wrapper surfaces.
@@ -943,6 +1029,55 @@ index 24ae4ff3..e7b7ac34 100644
 +            } while Date() < deadline
 +        }
 +        return action
++    }
++}
++
++public enum BBCNativeResetFailure: String, Error { case window, editor, draft, picker, reply, verification }
++
++public struct BBCNativeUICleanupFailure: Error {
++    public let original: (any Error)?
++    public let reset: any Error
++    public init(original: (any Error)?, reset: any Error) { self.original = original; self.reset = reset }
++}
++
++/// Cleanup must finish before the worker exits or another action begins.
++public enum BBCNativeUICycle {
++    public static func perform<T>(reset: () throws -> Void, action: () throws -> T) throws -> T {
++        try reset()
++        let result: T
++        do { result = try action() }
++        catch {
++            let original = error
++            do { try reset() }
++            catch { throw BBCNativeUICleanupFailure(original: original, reset: error) }
++            throw original
++        }
++        do { try reset() }
++        catch { throw BBCNativeUICleanupFailure(original: nil, reset: error) }
++        return result
++    }
++
++    public static func dismiss(visible: () throws -> Bool, cancel: () throws -> Void) throws {
++        guard try visible() else { return }
++        try cancel()
++        let deadline = Date().addingTimeInterval(1)
++        while try visible() {
++            guard Date() < deadline else { throw BBCNativeResetFailure.verification }
++            Thread.sleep(forTimeInterval: 0.05)
++        }
++    }
++}
++
++public enum BBCNativeOwnedComposer {
++    public static func clear(expected: String, owns: () throws -> Bool, read: () throws -> String, clear: () throws -> Void) throws {
++        guard try owns() else { throw BBCNativeResetFailure.verification }
++        let value = try read()
++        guard value.isEmpty || value == expected else { throw BBCNativeResetFailure.draft }
++        if !value.isEmpty {
++            guard try owns(), read() == expected else { throw BBCNativeResetFailure.verification }
++            try clear()
++        }
++        guard try owns(), read().isEmpty else { throw BBCNativeResetFailure.verification }
 +    }
 +}
 +
@@ -1001,7 +1136,7 @@ index 24ae4ff3..e7b7ac34 100644
  public final class PlatformAPI {
      private static let activeInstance = Protected<ObjectIdentifier?>()
  
-@@ -384,6 +481,48 @@ public final class PlatformAPI {
+@@ -384,6 +530,64 @@ public final class PlatformAPI {
          try await withMessagesController { try $0.undoSend(threadID: threadID, messageID: messageID) }
      }
  
@@ -1010,28 +1145,44 @@ index 24ae4ff3..e7b7ac34 100644
 +    public func bbcSetReactionOnce(threadID: String, messageID: String, reaction: String, on: Bool) async throws -> Bool {
 +        return try await withMessageSendLock {
 +            return try await withMessagesController { controller in
-+                do { return try controller.setReaction(threadID: threadID, messageID: messageID, reactionName: reaction, on: on, allowOverlay: false) }
-+                catch let failure as BBCNativeReactionFailure { throw failure }
-+                catch { throw BBCNativeReactionFailure.resolution }
++                try BBCNativeUICycle.perform(reset: { try controller.bbcResetUI() }) {
++                    do { return try controller.setReaction(threadID: threadID, messageID: messageID, reactionName: reaction, on: on, allowOverlay: false) }
++                    catch let failure as BBCNativeReactionFailure { throw failure }
++                    catch { throw BBCNativeReactionFailure.resolution }
++                }
 +            }
 +        }
 +    }
 +
 +    public func bbcSendLinkOnce(threadID: String, messageID: String, url: String) async throws {
 +        try await withMessageSendLock {
-+            try await withMessagesController { try $0.bbcSendLinkOnce(threadID: threadID, messageID: messageID, url: url) }
++            try await withMessagesController { controller in
++                try BBCNativeUICycle.perform(reset: { try controller.bbcResetUI() }) {
++                    try controller.bbcSendLinkOnce(threadID: threadID, messageID: messageID, url: url)
++                }
++            }
 +        }
 +    }
 +
 +    public func bbcReplyOnce(threadID: String, messageID: String, text: String) async throws {
 +        try await withMessageSendLock {
-+            try await withMessagesController { try $0.bbcReplyOnce(threadID: threadID, messageID: messageID, text: text) }
++            try await withMessagesController { controller in
++                try BBCNativeUICycle.perform(reset: { try controller.bbcResetUI() }) {
++                    try controller.bbcReplyOnce(threadID: threadID, messageID: messageID, text: text)
++                }
++            }
 +        }
 +    }
 +    public func bbcTyping(threadID: String, messageID: String, active: Bool) async throws {
 +        try await withMessagesController { controller in
-+            if active { try controller.bbcTypingStart(threadID: threadID, messageID: messageID) }
-+            else { try controller.bbcTypingStop(threadID: threadID) }
++            if active { try controller.bbcResetUI(); try controller.bbcTypingStart(threadID: threadID, messageID: messageID) }
++            else { try controller.bbcTypingStop(threadID: threadID); try controller.bbcResetUI() }
++        }
++    }
++
++    public func bbcResetUI() async throws {
++        try await withMessageSendLock {
++            try await withMessagesController { try $0.bbcResetUI() }
 +        }
 +    }
 +

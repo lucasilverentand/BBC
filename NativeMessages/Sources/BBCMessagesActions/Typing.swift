@@ -60,20 +60,40 @@ import Darwin
         progress("typing_scope", false)
         guard try proceed("typing_scope") else { return }
         guard Set(try database.unread(chat:params.chat_guid)).isSubset(of:Set(params.read_guids!)) else { throw ActionFailure.invalid }
-        progress("typing_start", true)
-        try await api.bbcTyping(threadID: params.chat_guid,messageID:guid,active:true)
-        progress("typing_started", true)
-        NativeIndicatorFailure.record(phase: "typing_started", attempted: true)
-        progress("typing_wait", true)
-        var waitError: Error?
-        do { while try !stopped() { try await Task.sleep(for:.milliseconds(100)) } }
-        catch { waitError = error }
-        progress("typing_cleanup", true)
-        try await api.bbcTyping(threadID:params.chat_guid,messageID:guid,active:false)
-        if let waitError { throw waitError }
+        var actionPhase = "typing_start"
+        progress(actionPhase, true)
+        try await NativeTypingLifecycle.perform(start: {
+            try await api.bbcTyping(threadID: params.chat_guid,messageID:guid,active:true)
+        }, wait: {
+            progress("typing_started", true)
+            NativeIndicatorFailure.record(phase: "typing_started", attempted: true)
+            actionPhase = "typing_wait"; progress(actionPhase, true)
+            while try !stopped() { try await Task.sleep(for:.milliseconds(100)) }
+        }, stop: {
+            progress("typing_cleanup", true)
+            defer { progress(actionPhase, true) }
+            do { try await api.bbcTyping(threadID:params.chat_guid,messageID:guid,active:false) }
+            catch { throw BBCNativeUICleanupFailure(original: nil, reset: error) }
+        })
         progress("typing_stopped", true)
         NativeIndicatorFailure.record(phase: "typing_stopped", attempted: true)
-        let receipt = try JSONSerialization.data(withJSONObject:["ok":true,"typing_id":params.typing_id!])
+        let receipt = try JSONSerialization.data(withJSONObject:["ok":true,"typing_id":params.typing_id!,"cleanup":"confirmed"])
         FileHandle.standardOutput.write(receipt+Data([10]))
+    }
+}
+
+@MainActor enum NativeTypingLifecycle {
+    static func perform(start: () async throws -> Void, wait: () async throws -> Void, stop: () async throws -> Void) async throws {
+        var original: (any Error)?
+        do { try await start(); try await wait() }
+        catch { original = error }
+        do { try await stop() }
+        catch {
+            if let failure = error as? BBCNativeUICleanupFailure {
+                throw BBCNativeUICleanupFailure(original: original, reset: failure.reset)
+            }
+            throw BBCNativeUICleanupFailure(original: original, reset: error)
+        }
+        if let original { throw original }
     }
 }
