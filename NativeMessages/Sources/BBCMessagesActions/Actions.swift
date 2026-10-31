@@ -35,7 +35,7 @@ enum BBCMessagesActions {
                 let ready = backend.object?["ready"]?.bool == true
                 let methods = backend.object?["capabilities"] ?? .array([])
                 receipt = ["ok":true,"adapter":"bbc-native-1","native_ready":ready,"backend":try JSONSerialization.jsonObject(with:JSONEncoder().encode(backend)),"methods":try JSONSerialization.jsonObject(with:JSONEncoder().encode(methods))]
-                receipt["methods"] = (receipt["methods"] as? [String] ?? []) + (LocalModels.ready ? ["media.transcribe","media.visual"] : ["media.visual"])
+                receipt["methods"] = (receipt["methods"] as? [String] ?? []) + ["read.status"] + (LocalModels.ready ? ["media.transcribe","media.visual"] : ["media.visual"])
             } else {
                 phase = "request_validation"
                 let parameters = try request.validated(), guid = parameters.message_guid!
