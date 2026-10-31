@@ -979,7 +979,7 @@ index bb6ae980..dce7646f 100644
  
      deinit {
 diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
-index 24ae4ff3..89361061 100644
+index 24ae4ff3..605c7c25 100644
 --- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
 +++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
 @@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
@@ -1095,10 +1095,10 @@ index 24ae4ff3..89361061 100644
 +        let value = try read()
 +        guard value.isEmpty || value == expected else { throw BBCNativeResetFailure.draft }
 +        if !value.isEmpty {
-+            guard try owns(), read() == expected else { throw BBCNativeResetFailure.verification }
++            guard try owns(), try read() == expected else { throw BBCNativeResetFailure.verification }
 +            try clear()
 +        }
-+        guard try owns(), read().isEmpty else { throw BBCNativeResetFailure.verification }
++        guard try owns(), try read().isEmpty else { throw BBCNativeResetFailure.verification }
 +    }
 +}
 +
