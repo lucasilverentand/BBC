@@ -54,6 +54,8 @@ Send `{"to":"person@example.com","media_id":"<returned UUID>"}` to `/v1/messages
 
 Request message pages with `attachments: true` to receive opaque attachment GUIDs, MIME types and byte counts; `is_audio_message` identifies native audio messages. `/v1/media/download` returns original bytes as `data_base64`, with `offset`, `next_offset`, `total_bytes` and `complete`. Request successive offsets until complete. Each chunk is at most 512 KiB; each attachment is at most 32 MiB. Downloads require the exact direct-chat/message/attachment tuple and a local file already available in Messages. Paths and remote download URLs are never accepted. Both sent and received attachments can be downloaded.
 
+Local visual preparation (`/v1/media/visual`) and audio transcription (`/v1/media/transcribe`) accept received attachments only. Transcription also requires locally staged models; check `/v1/status` for availability.
+
 ## Rich links
 
 Send `{"chat_guid":"…","message_guid":"…","url":"https://example.com","read_guids":["…"]}` to `/v1/links` with an operation UUID. The anchor must be a message in the intended direct chat, and `read_guids` must cover its current unread messages. BBC uses the native composer once, preserves existing drafts, and rejects an open reply composer. Messages generates the preview; `preview: "managed-by-messages"` does not guarantee the site supplies a card or the recipient sees one. Plain URL text can also be sent through `/v1/messages`.

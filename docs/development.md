@@ -14,6 +14,8 @@ For a new adapter file, mark it with `git add -N` inside that cache before gener
 
 ## Picker debugging
 
+Verify BBC's API contracts and native integration: exact targets, returned data, operation receipts and observed local effects. Apple's message delivery does not need a separate test or manual recipient confirmation as a BBC acceptance gate. Keep remote delivery and read visibility unknown unless independently observed.
+
 Keep one emoji, chat and message throughout a reproduction. Record an operation UUID and its exact body before dispatch; reconcile uncertain results through exact-chat reads rather than issuing another toggle. A successful AX call, a rendered glyph or a writable selection attribute is not proof that a reaction was submitted.
 
 Check the Mac's session before diagnosing UI code. A locked session can retain Accessibility permission while Messages exposes a window with no readable conversation controls. The `CGSSessionScreenIsLocked` flag and bounded `NativeMessagesUI` observations distinguish this condition from a picker failure. Wait for the operator to unlock the Mac before another live attempt.
