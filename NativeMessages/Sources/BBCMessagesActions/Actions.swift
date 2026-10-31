@@ -11,6 +11,8 @@ enum BBCMessagesActions {
         do {
             guard getuid() != 0, geteuid() == getuid() else { throw ActionFailure.invalid }
             if CommandLine.arguments.contains("--typing-session") {
+                phase = "operating_mode"
+                guard OperatingMode.current == .full else { throw ActionFailure.invalid }
                 try await NativeTypingSession.run(decoded:{ trace = NativeActionTrace($0) },progress:{ phase = $0; attempted = $1; trace?.record($0,attempted:$1) })
                 return
             }
@@ -18,6 +20,9 @@ enum BBCMessagesActions {
             while let data = try FileHandle.standardInput.read(upToCount:8192), !data.isEmpty {
                 guard input.count + data.count <= 65536 else { throw ActionFailure.invalid }; input.append(data)
             }
+            phase = "operating_mode"
+            let decoded = try JSONDecoder().decode(BBCJSONValue.self,from:input)
+            guard let method = decoded.object?["method"]?.string, OperatingMode.current.allows(method:method) else { throw ActionFailure.invalid }
             let envelope = try JSONDecoder().decode(BBCJSONValue.self,from:input)
             if let method = envelope.object?["method"]?.string, AdvancedRequest.methods.contains(method) {
                 let result = await AdvancedActions.perform(envelope)
@@ -26,7 +31,7 @@ enum BBCMessagesActions {
             let request = try JSONDecoder().decode(NativeRequest.self,from:input)
             trace = NativeActionTrace(request)
             if request.method == "status" {
-                let backend = await Task.detached { NativeBridgeClient.status() }.value
+                let backend: BBCJSONValue = OperatingMode.current == .readOnly ? .object(["ready":.bool(false),"reason":.string("read_only_mode"),"capabilities":.array([])]) : await Task.detached { NativeBridgeClient.status() }.value
                 let ready = backend.object?["ready"]?.bool == true
                 let methods = backend.object?["capabilities"] ?? .array([])
                 receipt = ["ok":true,"adapter":"bbc-native-1","native_ready":ready,"backend":try JSONSerialization.jsonObject(with:JSONEncoder().encode(backend)),"methods":try JSONSerialization.jsonObject(with:JSONEncoder().encode(methods))]

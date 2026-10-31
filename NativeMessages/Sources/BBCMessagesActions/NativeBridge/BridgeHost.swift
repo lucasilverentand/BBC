@@ -38,6 +38,7 @@ struct BridgeReadiness: Sendable {
     private var sessionLock: NativeOperationLock?
     private(set) var starting = false
     func start() async throws {
+        guard OperatingMode.current == .full else { throw ActionFailure.unavailable }
         if let process, !process.isRunning { stop() }
         guard !starting, broker == nil else { throw ActionFailure.busy }
         starting = true; defer { starting = false }

@@ -14,7 +14,7 @@ struct PermissionStatus: Equatable {
     @MainActor static func current() -> Self {
         let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/chat.db")
         let disk = (try? MessagesDatabase(url: url).maximumRowID()) != nil
-        return .init(fullDiskAccess: disk, automation: NativeMessagesStartup.automationStatus() == noErr, messagesRunning: NativeMessagesStartup.current() != nil)
+        return .init(fullDiskAccess: disk, automation: OperatingMode.current == .full && NativeMessagesStartup.automationStatus() == noErr, messagesRunning: NativeMessagesStartup.current() != nil)
     }
 }
 

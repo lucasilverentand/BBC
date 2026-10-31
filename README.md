@@ -13,6 +13,7 @@ Build bots and messaging integrations with native iMessage threads, reactions an
 - **Rich links** with native previews and received link metadata.
 - **Group management, edit/unsend and multipart messages** with native effects, where supported.
 - **Webhooks** for incoming messages and observed updates, plus history search.
+- **Read-only mode** for a personal account alongside a separate full-API macOS user.
 - **Scheduled sends** with update/cancel operations and iMessage availability checks.
 - **Local media processing**, including optional on-device audio transcription.
 - **Revocable API keys** and saved operation receipts to guard against duplicate sends.

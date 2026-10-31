@@ -14,6 +14,16 @@ import CoreServices
     private(set) var loginNeedsApproval = LoginItem.needsApproval
     private(set) var updatingLogin = false
     private var opened = false
+    private(set) var mode = OperatingMode.current
+    var permissionSteps: [PermissionStep] { mode == .readOnly ? [.fullDiskAccess] : PermissionStep.allCases }
+    var grantedPermissionCount: Int { permissionSteps.filter { permissions.granted($0) }.count }
+    func setMode(_ value: OperatingMode) {
+        guard !running, !starting, !nativeStarting else { return }
+        nativeHost.stop(); nativeConnected = false
+        scheduleService?.stop()
+        mode = value; UserDefaults.standard.set(value.rawValue,forKey:"operatingMode")
+        refreshNativeBridge()
+    }
     var error: String?
     private(set) var permissions = PermissionStatus()
     @ObservationIgnored private let permissionHelper = PermissionHelperPanel()
@@ -51,9 +61,11 @@ import CoreServices
     }
     func refreshPermissions() { permissions = PermissionStatus.current() }
     func refreshNativeBridge() {
+        guard mode == .full else { nativeConnected = false; nativeRequirements = "Read-only mode does not start native messaging."; return }
         Task {
             let readiness = await Task.detached { BridgeReadiness.current() }.value
             let status = await Task.detached { NativeBridgeClient.status() }.value
+            guard mode == .full else { return }
             nativeConnected = status.object?["ready"]?.bool == true
             if nativeConnected { nativeRequirements = "Native messaging connected. No mouse or keyboard automation." }
             else if readiness.sip == .enabled { nativeRequirements = "Native messaging requires a host configured for private APIs. SIP is enabled. BBC does not change security settings." }
@@ -62,7 +74,7 @@ import CoreServices
         }
     }
     func startNativeBridge() {
-        guard !nativeStarting else { return }; nativeStarting = true
+        guard mode == .full, !nativeStarting else { return }; nativeStarting = true
         Task {
             defer { nativeStarting = false; refreshNativeBridge() }
             do { try await nativeHost.start() }
@@ -73,6 +85,7 @@ import CoreServices
     func showPermissionHelper() { refreshPermissions(); permissionHelper.show(model: self) }
     func closePermissionHelper() { permissionHelper.close() }
     func setUpPermission(_ step: PermissionStep) {
+        guard permissionSteps.contains(step) else { return }
         showPermissionHelper()
         switch step {
         case .fullDiskAccess: NSWorkspace.shared.open(step.settingsURL)
@@ -84,6 +97,7 @@ import CoreServices
         }
     }
     func requestAutomation() async {
+        guard mode == .full else { return }
         do {
             let pid = try await NativeMessagesStartup.ensureRunning()
             let target = NSAppleEventDescriptor(processIdentifier: pid)
@@ -115,15 +129,15 @@ import CoreServices
             let webhooks: WebhookService
             if let cached = webhookService { webhooks = cached }
             else { webhooks = try WebhookService(keys:store); webhookService = webhooks }
-            let schedules: LocalScheduleService
-            if let cached = scheduleService { schedules = cached }
-            else {
+            var schedules: LocalScheduleService?
+            if mode == .full, let cached = scheduleService { schedules = cached }
+            else if mode == .full {
                 schedules = try LocalScheduleService(directory:store.directory.appendingPathComponent("schedules",isDirectory:true),
                     isKeyActive:{ id in store.keys.contains { $0.id == id } },execute:{ try await client.request($0) },
                     mediaExpiresAt:{ id in try MediaStore(directory:store.directory.appendingPathComponent("media")).resolve(id).0.created.addingTimeInterval(MediaStore.lifetime) })
                 scheduleService = schedules
             }
-            let router = APIRouter(keys:store,webhooks:webhooks,schedules:schedules) { try await client.request($0) }
+            let router = APIRouter(keys:store,webhooks:webhooks,schedules:schedules,mode:mode) { try await client.request($0) }
             self.router = router
             let listener = try LocalAPIServer(host: allowNetwork ? "0.0.0.0" : "127.0.0.1", port: port, router: router)
             server = listener; starting = true; error = nil

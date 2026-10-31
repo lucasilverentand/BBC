@@ -16,6 +16,12 @@ import BBCClient
             let request = try JSONDecoder().decode(BBCJSONValue.self, from: input)
             id = request.object?["id"] ?? .null
             guard let method = request.object?["method"]?.string else { throw ActionFailure.invalid }
+            guard OperatingMode.current.allows(method:method) else {
+                emit(.object(["jsonrpc":.string("2.0"),"id":id,"error":.object([
+                    "code":.number(-32003),"message":.string("Read-only mode blocks this operation."),
+                    "data":.object(["disposition":.string("rejected")])])]))
+                return
+            }
             let parameters = request.object?["params"]?.object ?? [:]
             let args = CommandLine.arguments
             let databaseURL: URL
@@ -27,7 +33,7 @@ import BBCClient
             case "status":
                 _ = try db.maximumRowID()
                 var methods = ["messages.after", "messages.status", "messages.search", "media.download"]
-                if NativeMessagesStartup.automationStatus() == noErr { methods.append("send") }
+                if OperatingMode.current == .full, NativeMessagesStartup.automationStatus() == noErr { methods.append("send") }
                 result = .object(["version": .string("bbc-1"), "methods": .array(methods.map(BBCJSONValue.string))])
             case "messages.after": result = try db.page(parameters)
             case "messages.search": result = try db.search(parameters)

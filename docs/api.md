@@ -2,6 +2,8 @@
 
 Start the API in the Mac app. All routes require `Authorization: Bearer <API key>`. Create and revoke keys in the app; the API cannot mint keys. The default base URL is `http://127.0.0.1:7861`.
 
+Each macOS login selects Full API or [read-only/watch mode](operating-modes.md) in the app. Read-only mode permits observation and webhook configuration, rejects messaging mutations with HTTP 403 `readonly_mode`, and never starts the native bridge or scheduled sending. Status includes `operating_mode` and the allowed methods. Use distinct ports and keys for simultaneous logins.
+
 Every mutation requires an `Idempotency-Key` header containing a UUID chosen and saved by the client before dispatch. Retrying the same UUID and body returns the saved receipt. A changed body returns HTTP 409. An interrupted operation remains uncertain and is never automatically dispatched again. Use `GET /v1/operations/<uuid>` with the same API key to retrieve its retained outcome. Do not create a new UUID merely because the original response was lost.
 
 ## Endpoints

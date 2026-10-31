@@ -21,7 +21,12 @@ struct ContentView: View {
                     }
                 }.padding(.vertical, 6)
                 LabeledContent("API", value: model.running ? "Running" : model.starting ? "Starting…" : "Stopped")
+                Picker("Mode",selection:Binding(get:{ model.mode },set:{ model.setMode($0) })) {
+                    ForEach(OperatingMode.allCases) { Text($0.title).tag($0) }
+                }.disabled(model.running || model.starting || model.nativeStarting)
+                Text(model.mode == .readOnly ? "Read history and receive webhooks. Sending, reactions, read receipts and typing are blocked. Full Disk Access is the only required permission." : "Send and manage messages through this macOS user's account.").font(.caption).foregroundStyle(.secondary)
                 TextField("Port", value: $port, format: .number.grouping(.never)).disabled(model.running || model.starting)
+                Text("Use a different port for each macOS user, for example 7861 and 7862.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Allow connections from other devices", isOn: $allowNetwork).disabled(model.running || model.starting)
                 Text("http://\(allowNetwork ? "your-mac" : "127.0.0.1"):\(String(port))/v1").font(.system(.body, design: .monospaced)).textSelection(.enabled)
                 Text(allowNetwork ? "Use a trusted private network or your own HTTPS proxy. BBC does not configure remote access." : "Only this Mac can connect. Every request requires an API key.").font(.caption).foregroundStyle(.secondary)
@@ -32,7 +37,7 @@ struct ContentView: View {
             Section("Startup") {
                 Toggle("Start at login", isOn: Binding(get: { model.startAtLogin || model.loginNeedsApproval }, set: { value in Task { await model.setStartAtLogin(value) } })).disabled(model.updatingLogin)
                 Toggle("Start API when the app opens", isOn: $startAPIOnLaunch)
-                Toggle("Start native messaging when the app opens", isOn: $startNativeBridgeOnLaunch)
+                Toggle("Start native messaging when the app opens", isOn: $startNativeBridgeOnLaunch).disabled(model.mode == .readOnly)
                 Text("The app starts after you sign into this Mac, when Messages can use your account.").font(.caption).foregroundStyle(.secondary)
                 if model.loginNeedsApproval {
                     Button("Approve in Login Items…") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!) }
@@ -50,14 +55,14 @@ struct ContentView: View {
                     TextField("Key name, e.g. Seven", text: $keyName)
                     Button("Create key") { if let value = model.createKey(name: keyName) { newKey = value; keyName = "" } }.disabled(keyName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                Text("Keys allow messaging through this Mac. Their hashes stay on this Mac; each secret is shown once.").font(.caption).foregroundStyle(.secondary)
+                Text("Keys follow this user's selected mode. Their hashes stay in this user's account; each secret is shown once.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Native messaging") {
                 Text(model.nativeRequirements).font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Button(model.nativeConnected ? "Stop native bridge" : "Start native bridge") {
                         if model.nativeConnected { model.stopNativeBridge() } else { model.startNativeBridge() }
-                    }.disabled(model.nativeStarting)
+                    }.disabled(model.nativeStarting || model.mode == .readOnly)
                     Button("Recheck") { model.refreshNativeBridge() }.disabled(model.nativeStarting)
                     Link("Host setup",destination:URL(string:"https://github.com/lucasilverentand/BBC/blob/main/docs/native-bridge.md")!)
                 }
@@ -69,7 +74,7 @@ struct ContentView: View {
                     Button("Show setup helper") { model.showPermissionHelper() }
                     Button("Recheck") { model.refreshPermissions() }
                     Spacer()
-                    Text("\(model.permissions.grantedCount) of \(PermissionStep.allCases.count) ready").font(.caption).foregroundStyle(.secondary)
+                    Text("\(model.grantedPermissionCount) of \(model.permissionSteps.count) ready").font(.caption).foregroundStyle(.secondary)
                 }
             }
             if let error = model.error { Text(error).foregroundStyle(.red).font(.callout) }

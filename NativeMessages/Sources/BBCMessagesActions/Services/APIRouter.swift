@@ -9,9 +9,11 @@ import BBCClient
     private var typing: [UUID: Task<Void, Never>] = [:]
     private let webhooks: WebhookService?
     private let schedules: LocalScheduleService?
+    private let mode: OperatingMode
     init(keys: APIKeyStore, webhooks: WebhookService? = nil, schedules: LocalScheduleService? = nil,
+         mode: OperatingMode = .full,
          execute: @escaping @MainActor (BBCJSONValue) async throws -> BBCJSONValue) {
-        self.keys = keys; self.webhooks = webhooks; self.schedules = schedules; self.execute = execute
+        self.keys = keys; self.webhooks = webhooks; self.schedules = schedules; self.mode = mode; self.execute = execute
     }
     struct Response { let status: Int; let value: BBCJSONValue }
     struct Operation: Codable { let fingerprint: String; var result: BBCJSONValue? }
@@ -34,11 +36,17 @@ import BBCClient
                 if case .array(let values) = fields["methods"] { methods = values }
                 if webhooks != nil { methods += ["webhooks.register","webhooks.list","webhooks.remove"].map(BBCJSONValue.string) }
                 if schedules != nil { methods += ["schedule.create","schedule.update","schedule.cancel","schedule.get","schedule.list"].map(BBCJSONValue.string) }
-                fields["methods"] = .array(methods)
+                fields["methods"] = .array(methods.filter { $0.string.map { mode.allows(method:$0) } == true })
+                fields["operating_mode"] = .string(mode.rawValue)
+                if mode == .readOnly {
+                    fields["native_bridge_ready"] = .bool(false)
+                    fields["native_bridge"] = .object(["ready":.bool(false),"reason":.string("read_only_mode"),"capabilities":.array([])])
+                }
                 return .init(status:200,value:.object(fields))
             }
             guard method == "POST" else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
             if path == "/v1/media/upload" {
+                guard mode == .full else { return readOnlyDenied }
                 guard !uploading, let filename = headers["x-bbc-filename"] else { throw ActionFailure.invalid }
                 uploading = true; defer { uploading = false }
                 let store = try MediaStore(directory: keys.directory.appendingPathComponent("media"))
@@ -59,6 +67,7 @@ import BBCClient
                 "/v1/schedules/get":"schedule.get", "/v1/schedules/list":"schedule.list"
             ]
             guard let operationMethod = endpointMethods[path], var params = request.object else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
+            guard mode.allows(method:operationMethod) else { return readOnlyDenied }
             let observational = ["messages.after","messages.status","messages.search","availability","media.download","read.status","media.visual","media.transcribe","webhooks.list","schedule.get","schedule.list"].contains(operationMethod)
             if operationMethod == "send" {
                 params["service"] = .string("imessage"); params["allow_sms_fallback"] = .bool(false)
@@ -121,6 +130,7 @@ import BBCClient
         } catch { return .init(status: 400, value: .object(["error": .string("invalid_or_unavailable_request")])) }
     }
     func keysChanged() { for task in typing.values { task.cancel() }; typing.removeAll() }
-    func startServices() { webhooks?.start(); schedules?.start() }
+    private var readOnlyDenied: Response { .init(status:403,value:.object(["ok":.bool(false),"uncertain":.bool(false),"error":.string("readonly_mode")])) }
+    func startServices() { webhooks?.start(); if mode == .full { schedules?.start() } }
     func stop() { keysChanged(); webhooks?.stop(); schedules?.stop() }
 }
