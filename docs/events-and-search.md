@@ -32,6 +32,10 @@ The service runs while the API is running. Each second it checks up to 100 new r
 
 BBC stores at most eight subscriptions and 512 queued deliveries, within a 64 MiB state file. A full outbox pauses observation without advancing its cursor, while delivery continues to drain it. `outbox_full`, `observation_unavailable` and `storage_unavailable` are explicit observation states. Database access failure does not fabricate events. New arrivals catch up after access or queue capacity returns, subject to Messages retaining those rows.
 
+Replacing the Messages database or rolling its maximum row ID behind the saved incoming cursor latches `database_changed`. BBC pauses new observation and keeps that state across restarts, even if the replacement later reaches the old row count. Already queued events retain their delivery IDs and can finish. Remove every old subscription, or revoke their owning keys, then register again to establish a baseline for the current database. Restored history is not replayed as new incoming messages.
+
+An unchanged revisit advances its scan position in memory without rewriting the snapshot file. Message changes, incoming cursors, registrations and delivery receipts remain durable. After restart an older revisit position can be scanned again; saved hashes prevent duplicate unchanged-message events.
+
 ## History search
 
 `POST /v1/messages/search` is read-only and does not require an operation UUID:

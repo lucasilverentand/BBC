@@ -66,7 +66,7 @@ import CoreServices
         Task {
             defer { nativeStarting = false; refreshNativeBridge() }
             do { try await nativeHost.start() }
-            catch { error = "Could not start the native bridge. Check host setup and whether Messages can quit. No UI fallback was used." }
+            catch { self.error = "Could not start the native bridge. Check host setup and whether Messages can quit. No UI fallback was used." }
         }
     }
     func stopNativeBridge() { nativeHost.stop(); nativeConnected = false; refreshNativeBridge() }

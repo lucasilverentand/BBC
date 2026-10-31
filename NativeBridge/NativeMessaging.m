@@ -201,7 +201,16 @@ void BBCNativePerform(NSDictionary *request, BBCNativeClassResolver resolver, BB
                     } @catch (NSException *exception) { completion(Failure(@"native_send_unconfirmed",YES)); }
                 });
             };
-            Invoke(detector,@"scanMessage:outgoing:waitUntilDone:completionBlock:",@[message,@YES,@YES,[scanned copy]]);
+            @try {
+                Invoke(detector,@"scanMessage:outgoing:waitUntilDone:completionBlock:",@[message,@YES,@YES,[scanned copy]]);
+            } @catch (NSException *exception) {
+                // A scanner may queue its callback before throwing. Cancel
+                // that queued send before returning a not-dispatched failure.
+                if (!finished) {
+                    finished = YES;
+                    completion(Failure(@"native_link_scan_failed",NO));
+                }
+            }
             return;
         }
         attempted = YES;

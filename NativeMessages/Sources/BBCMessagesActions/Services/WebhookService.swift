@@ -38,6 +38,8 @@ struct WebhookSnapshot: Sendable {
         var revisitChat = ""
         var snapshots: [String:SnapshotRecord] = [:]
         var initialized = false
+        var databaseIdentity: String?
+        var databaseChanged: Bool?
     }
     struct SnapshotRecord: Codable, Equatable { let rowID: Int64; let digest: String }
     static let maximumSubscriptions = 8
@@ -68,6 +70,7 @@ struct WebhookSnapshot: Sendable {
             guard state.subscriptions.count <= Self.maximumSubscriptions, state.deliveries.count <= Self.maximumDeliveries,
                   state.snapshots.count <= Self.maximumSnapshots else { throw ActionFailure.invalid }
         } else { state = State() }
+        if state.databaseChanged == true { observation = "database_changed" }
     }
     func start() {
         guard task == nil else { return }
@@ -88,10 +91,13 @@ struct WebhookSnapshot: Sendable {
             guard state.subscriptions.count < Self.maximumSubscriptions,
                   let raw = params["url"]?.string, let url = Self.validURL(raw) else { throw ActionFailure.invalid }
             let chat = try SearchFilter.optionalText(params["chat_guid"],maximum:512)
+            let identity = try sourceIdentity()
             let database = try MessagesDatabase(url:databaseURL)
             let maximum = try database.maximumRowID()
+            guard try sourceIdentity() == identity else { throw ActionFailure.unavailable }
             var next = state
-            if !next.initialized { next.highWater = maximum; next.initialized = true }
+            if next.subscriptions.isEmpty { resetObservation(in:&next) }
+            try bindSource(identity,maximum:maximum,in:&next)
             var bytes = [UInt8](repeating:0,count:32)
             guard SecRandomCopyBytes(kSecRandomDefault,bytes.count,&bytes) == errSecSuccess else { throw ActionFailure.unavailable }
             let item = Subscription(id:UUID(),keyID:keyID,url:url,chat:chat,secret:Data(bytes).base64EncodedString(),afterRowID:maximum)
@@ -106,7 +112,9 @@ struct WebhookSnapshot: Sendable {
         case "webhooks.remove":
             guard let raw = params["webhook_id"]?.string, let id = UUID(uuidString:raw),
                   state.subscriptions.contains(where: { $0.id == id && $0.keyID == keyID }) else { throw ActionFailure.invalid }
-            var next = state; next.subscriptions.removeAll { $0.id == id }; next.deliveries.removeAll { $0.subscriptionID == id }; try save(next)
+            var next = state; next.subscriptions.removeAll { $0.id == id }; next.deliveries.removeAll { $0.subscriptionID == id }
+            if next.subscriptions.isEmpty { resetObservation(in:&next); observation = "idle" }
+            try save(next)
             return .object(["ok":.bool(true),"webhook_id":.string(id.uuidString)])
         default: throw ActionFailure.invalid
         }
@@ -134,11 +142,13 @@ struct WebhookSnapshot: Sendable {
             let active = Set(next.subscriptions.map(\.id))
             next.deliveries.removeAll { !active.contains($0.subscriptionID) }
             if next.subscriptions.isEmpty {
-                next.snapshots.removeAll(); next.initialized = false; next.highWater = 0; next.highWaterChat = ""; next.revisit = 0; next.revisitChat = ""
+                resetObservation(in:&next)
                 try save(next); observation = "idle"; return
             }
+            if next.databaseChanged == true { try save(next); throw ObservationFailure.databaseChanged }
+            let identity = try sourceIdentity()
             let database = try MessagesDatabase(url:databaseURL)
-            if !next.initialized { next.highWater = try database.maximumRowID(); next.initialized = true }
+            try bindSource(identity,maximum:database.maximumRowID(),in:&next)
             // Keep the new-message cursor separate from revisits. A read receipt
             // changes an existing row; ROWID alone cannot represent that event.
             let fresh = try database.webhookSnapshots(after:next.highWater,afterChat:next.highWaterChat,limit:100)
@@ -158,8 +168,16 @@ struct WebhookSnapshot: Sendable {
                 next.revisitChat = snapshot.payload.object?["chat_guid"]?.string ?? ""
             }
             if revisited.count < 100 { next.revisit = 0; next.revisitChat = "" }
+            if try sourceIdentity() != identity {
+                // Discard events produced by a scan straddling file replacement.
+                var blocked = state; blocked.databaseChanged = true; try save(blocked)
+                throw ObservationFailure.databaseChanged
+            }
             try save(next); observation = "watching"
-        } catch { observation = (error as? ActionFailure) == .busy ? "outbox_full" : "observation_unavailable" }
+        } catch {
+            if error is ObservationFailure { observation = "database_changed" }
+            else { observation = (error as? ActionFailure) == .busy ? "outbox_full" : "observation_unavailable" }
+        }
         // Delivery continues even if a full outbox or unavailable database has
         // paused observation. A successful drain allows the next scan to resume.
         for delivery in state.deliveries.filter({ $0.nextAttempt <= now }).prefix(4) {
@@ -211,11 +229,35 @@ struct WebhookSnapshot: Sendable {
     }
     private func save(_ next: State) throws {
         guard next != state else { return }
+        // A revisit can safely restart from an earlier persisted cursor because
+        // unchanged message hashes produce no events. Avoid rewriting the whole
+        // snapshot file every second just to checkpoint that scan position.
+        var previous = state; previous.revisit = next.revisit; previous.revisitChat = next.revisitChat
+        if next == previous { state = next; return }
         let data = try JSONEncoder.sorted.encode(next)
         guard data.count <= 64 * 1024 * 1024 else { throw ActionFailure.unavailable }
         try data.write(to:file,options:.atomic)
         try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path)
         state = next
+    }
+    private enum ObservationFailure: Error { case databaseChanged }
+    private func resetObservation(in next: inout State) {
+        next.snapshots.removeAll(); next.initialized = false; next.highWater = 0; next.highWaterChat = ""; next.revisit = 0; next.revisitChat = ""
+        next.databaseIdentity = nil; next.databaseChanged = nil
+    }
+    private func sourceIdentity() throws -> String {
+        var info = stat()
+        guard stat(databaseURL.path,&info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw ActionFailure.unavailable }
+        return "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec)"
+    }
+    private func bindSource(_ identity: String, maximum: Int64, in next: inout State) throws {
+        if next.databaseChanged == true || (next.databaseIdentity != nil && next.databaseIdentity != identity) ||
+            (next.initialized && maximum < next.highWater) {
+            next.databaseChanged = true; try save(next); observation = "database_changed"
+            throw ObservationFailure.databaseChanged
+        }
+        next.databaseIdentity = identity
+        if !next.initialized { next.highWater = maximum; next.initialized = true }
     }
 }
 

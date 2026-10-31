@@ -147,6 +147,92 @@ final class EventsAndSearchTests: XCTestCase {
         await gate.release(); await work.value
         XCTAssertEqual(service.state.deliveries.map(\.attempts),[1,0])
     }
+    @MainActor func testDatabaseRowRollbackLatchesAcrossRestartAndRequiresRegistration() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        insert(connection)
+        XCTAssertEqual(sqlite3_exec(connection,"UPDATE message SET ROWID=20; UPDATE chat_message_join SET message_id=20",nil,nil,nil),SQLITE_OK)
+        let keys = try APIKeyStore(directory:directory), secret = try keys.create(name:"fixture")
+        let keyID = try XCTUnwrap(keys.authenticate(secret))
+        var service: WebhookService? = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        let registration = try await service!.handle(method:"webhooks.register",params:["url":.string("https://fixture.invalid/events")],keyID:keyID)
+        let now = Date()
+        insert(connection,guid:"22222222-2222-4222-8222-222222222222")
+        await service!.tick(now:now)
+        let pending = try XCTUnwrap(service!.state.deliveries.first?.id)
+        XCTAssertEqual(service!.state.highWater,21)
+        XCTAssertEqual(sqlite3_exec(connection,"DELETE FROM message; DELETE FROM chat_message_join",nil,nil,nil),SQLITE_OK)
+        insert(connection,guid:"33333333-3333-4333-8333-333333333333")
+        await service!.tick(now:now.addingTimeInterval(1))
+        XCTAssertEqual(service!.observation,"database_changed")
+        XCTAssertEqual(service!.state.deliveries.map(\.id),[pending])
+        service = nil
+        // Catching up to the old ROWID must not silently clear the source gate.
+        XCTAssertEqual(sqlite3_exec(connection,"UPDATE message SET ROWID=30; UPDATE chat_message_join SET message_id=30",nil,nil,nil),SQLITE_OK)
+        let restarted = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        await restarted.tick(now:now.addingTimeInterval(3))
+        XCTAssertEqual(restarted.observation,"database_changed")
+        XCTAssertEqual(restarted.state.deliveries.map(\.id),[pending])
+        do {
+            _ = try await restarted.handle(method:"webhooks.register",params:["url":.string("https://other.invalid/events")],keyID:keyID)
+            XCTFail("Old registrations must be removed before rebasing")
+        } catch {}
+        _ = try await restarted.handle(method:"webhooks.remove",params:["webhook_id":registration.object!["webhook_id"]!],keyID:keyID)
+        _ = try await restarted.handle(method:"webhooks.register",params:["url":.string("https://fixture.invalid/events")],keyID:keyID)
+        insert(connection,guid:"44444444-4444-4444-8444-444444444444")
+        await restarted.tick(now:now.addingTimeInterval(4))
+        XCTAssertEqual(restarted.observation,"watching")
+        XCTAssertEqual(restarted.state.deliveries.count,1)
+        XCTAssertNotEqual(restarted.state.deliveries.first?.id,pending)
+    }
+    @MainActor func testDatabaseFileReplacementWithHigherRowsDoesNotReplayHistory() async throws {
+        let (url,connection) = try fixture(), (replacement,replacementConnection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); sqlite3_close(replacementConnection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:replacement); try? FileManager.default.removeItem(at:directory) }
+        insert(connection)
+        let keys = try APIKeyStore(directory:directory), secret = try keys.create(name:"fixture")
+        let keyID = try XCTUnwrap(keys.authenticate(secret))
+        var service: WebhookService? = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        _ = try await service!.handle(method:"webhooks.register",params:["url":.string("https://fixture.invalid/events")],keyID:keyID)
+        await service!.tick()
+        service = nil
+        insert(replacementConnection,guid:"22222222-2222-4222-8222-222222222222")
+        XCTAssertEqual(sqlite3_exec(replacementConnection,"UPDATE message SET ROWID=100; UPDATE chat_message_join SET message_id=100",nil,nil,nil),SQLITE_OK)
+        try Data(contentsOf:replacement).write(to:url,options:.atomic)
+        let restarted = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        await restarted.tick()
+        XCTAssertEqual(restarted.observation,"database_changed")
+        XCTAssertTrue(restarted.state.deliveries.isEmpty)
+        XCTAssertEqual(restarted.state.highWater,1)
+    }
+    @MainActor func testUnchangedRevisitAdvancesInMemoryWithoutRewritingSnapshotFile() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        XCTAssertEqual(sqlite3_exec(connection,"""
+            WITH RECURSIVE numbers(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM numbers WHERE x<200)
+            INSERT INTO message(guid,text,is_from_me,date,service) SELECT printf('%08d-1111-4111-8111-111111111111',x),'baseline',0,x,'iMessage' FROM numbers;
+            INSERT INTO chat_message_join SELECT 1,ROWID FROM message;
+            """,nil,nil,nil),SQLITE_OK)
+        let keys = try APIKeyStore(directory:directory), secret = try keys.create(name:"fixture")
+        let keyID = try XCTUnwrap(keys.authenticate(secret))
+        let service = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        _ = try await service.handle(method:"webhooks.register",params:["url":.string("https://fixture.invalid/events")],keyID:keyID)
+        await service.tick()
+        XCTAssertEqual(service.state.snapshots.count,200)
+        XCTAssertEqual(service.state.revisit,100)
+        let file = directory.appendingPathComponent("webhooks.json"), saved = try Data(contentsOf:file)
+        let modified = try FileManager.default.attributesOfItem(atPath:file.path)[.modificationDate] as? Date
+        await service.tick()
+        XCTAssertEqual(service.state.revisit,200)
+        XCTAssertEqual(try Data(contentsOf:file),saved)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath:file.path)[.modificationDate] as? Date,modified)
+        await service.tick()
+        XCTAssertEqual(service.state.revisit,0)
+        XCTAssertEqual(try Data(contentsOf:file),saved)
+        XCTAssertTrue(service.state.deliveries.isEmpty)
+    }
     func testWebhookURLAndSignatureBindTheExactBodyAndTimestamp() {
         XCTAssertNil(WebhookService.validURL("http://remote.invalid/events"))
         XCTAssertNil(WebhookService.validURL("https://user:password@fixture.invalid/events"))

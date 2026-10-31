@@ -71,8 +71,19 @@ private let chatID = "any;-;fixture@example.test"
     @objc var messageSummaryInfo: NSDictionary { ["fixture":"native-summary"] }
 }
 
+@objc final class FixtureFailingDetector: NSObject {
+    nonisolated(unsafe) static var drainBeforeRaising = false
+    @objc class func sharedInstance() -> FixtureFailingDetector { FixtureFailingDetector() }
+    @objc(scanMessage:outgoing:waitUntilDone:completionBlock:)
+    func scan(_ message: FixtureMessage, outgoing: Bool, waitUntilDone: Bool, completion: @escaping (Int,Bool,Any?) -> Void) {
+        completion(0,true,nil)
+        if Self.drainBeforeRaising { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }
+        NSException(name:NSExceptionName("FixtureScanFailure"),reason:nil,userInfo:nil).raise()
+    }
+}
+
 final class NativeMessagingTests: XCTestCase {
-    override func setUp() { FixtureChat.shared = FixtureChat(); FixtureItem.ambiguous = false }
+    override func setUp() { FixtureChat.shared = FixtureChat(); FixtureItem.ambiguous = false; FixtureFailingDetector.drainBeforeRaising = false }
     private var resolver: BBCNativeClassResolver {
         { name in
             switch name {
@@ -158,5 +169,33 @@ final class NativeMessagingTests: XCTestCase {
         XCTAssertFalse(FixtureChat.shared.typing)
         XCTAssertEqual(perform("read")["ok"] as? Bool,true)
         XCTAssertEqual(FixtureChat.shared.reads,1); XCTAssertEqual(FixtureChat.shared.sends,0)
+    }
+    func testScannerCallbackThenExceptionCannotSendAfterNotDispatchedFailure() {
+        let base = resolver
+        var receipt: [String:Any] = [:], completions = 0
+        BBCNativePerform(["method":"link","chat_guid":chatID,"message_guid":targetID,"text":"https://example.test"],{ name in
+            name == "IMDDController" ? FixtureFailingDetector.self : base(name)
+        }) {
+            receipt = $0; completions += 1
+        }
+        XCTAssertEqual(receipt["ok"] as? Bool,false)
+        XCTAssertEqual(receipt["uncertain"] as? Bool,false)
+        // Drain the exact callback queued before the scanner raised.
+        let drained = expectation(description:"queued scanner callback drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for:[drained],timeout:1)
+        XCTAssertEqual(completions,1)
+        XCTAssertEqual(FixtureChat.shared.sends,0)
+    }
+    func testScannerExceptionAfterReentrantSendPreservesItsOnlyReceipt() {
+        FixtureFailingDetector.drainBeforeRaising = true
+        let base = resolver
+        var receipts: [[String:Any]] = []
+        BBCNativePerform(["method":"link","chat_guid":chatID,"message_guid":targetID,"text":"https://example.test"],{ name in
+            name == "IMDDController" ? FixtureFailingDetector.self : base(name)
+        }) { receipts.append($0) }
+        XCTAssertEqual(FixtureChat.shared.sends,1)
+        XCTAssertEqual(receipts.count,1)
+        XCTAssertEqual(receipts.first?["ok"] as? Bool,true)
     }
 }
