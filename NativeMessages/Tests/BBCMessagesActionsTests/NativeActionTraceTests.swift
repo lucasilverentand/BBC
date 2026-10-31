@@ -24,17 +24,13 @@ final class NativeActionTraceTests: XCTestCase {
         XCTAssertNil(try trace("status")); XCTAssertNil(try trace("read", id: "owner@example.test"))
         for method in ["read", "read.status", "reply", "typing.start"] { XCTAssertNotNil(try trace(method)) }
     }
-    @MainActor func testReadTraceDistinguishesUnhideFailureFromSubmissionWithoutChangingEffects() throws {
-        let target = NativeMessageRead.Target(process: .init(pid: 42, uid: getuid()), messageGUID: id)
-        var stages: [String] = [], sends = 0
-        XCTAssertThrowsError(try NativeMessageRead.submit(target, effectiveUID: getuid(), currentProcess: target.process,
-            unhide: { false }, observation: { stages.append($0) }, send: { sends += 1 }))
-        XCTAssertEqual(stages, ["read_unhide_requested"]); XCTAssertEqual(sends, 0)
-        stages = []
-        XCTAssertThrowsError(try NativeMessageRead.submit(target, effectiveUID: getuid(), currentProcess: target.process,
-            unhide: { true }, observation: { stages.append($0) }, send: { sends += 1; throw NSError(domain: NSOSStatusErrorDomain, code: -1712) }))
-        XCTAssertEqual(stages, ["read_unhide_requested", "read_unhide_accepted", "read_submit"])
-        XCTAssertEqual(sends, 1)
+    func testNativeDispatchAndConfirmationHaveDistinctTraceStages() throws {
+        let value = try XCTUnwrap(trace())
+        for stage in ["native_dispatch","native_confirmation"] {
+            let line = try XCTUnwrap(value.line(stage,attempted:true))
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(line.utf8)) as? [String:Any])
+            XCTAssertEqual(fields["stage"] as? String,stage)
+        }
     }
     func testOnlyKnownOSStatusCodesCanEnterDiagnostics() throws {
         let trace = try XCTUnwrap(trace())
@@ -50,7 +46,7 @@ final class NativeActionTraceTests: XCTestCase {
         let trace = try XCTUnwrap(NativeActionTrace(JSONDecoder().decode(NativeRequest.self, from: data)))
         XCTAssertEqual(trace.sourceKey, "c20a2bc6d0a7d44a59425db62213328f4020c908675bb01cf0a5d6bd908314b0")
     }
-    func testCleanupReturnCannotClaimTheOwnedDraftWasCleared() throws {
+    func testCleanupReturnAloneCannotClaimTheNativeLeaseWasCleared() throws {
         let value = try XCTUnwrap(trace("typing.start"))
         let line = try XCTUnwrap(value.line("typing_stopped", attempted: true))
         let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])

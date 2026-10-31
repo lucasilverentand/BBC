@@ -14,7 +14,7 @@ struct PermissionHelperView: View {
                 AppFileDragView(url: Bundle.main.bundleURL).frame(width: 56, height: 56)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Drag this app into Settings").fontWeight(.medium)
-                    Text("Drop it into Full Disk Access or Accessibility, then enable it.").font(.caption).foregroundStyle(.secondary)
+                    Text("Drop it into Full Disk Access, then enable it.").font(.caption).foregroundStyle(.secondary)
                 }
             }.padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
             PermissionChecklistView(model: model, compact: true)

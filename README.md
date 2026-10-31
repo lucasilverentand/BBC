@@ -11,15 +11,20 @@ Build bots and messaging integrations with native iMessage threads, reactions an
 - **Typing indicators, read receipts and delivery-state checks.**
 - **Photos, videos and audio** — send uploads and download received attachments.
 - **Rich links** with native previews and received link metadata.
+- **Group management, edit/unsend and multipart messages** with native effects, where supported.
+- **Webhooks** for incoming messages and observed updates, plus history search.
+- **Scheduled sends** with update/cancel operations and iMessage availability checks.
 - **Local media processing**, including optional on-device audio transcription.
 - **Revocable API keys** and saved operation receipts to guard against duplicate sends.
 - **Guided setup** with a floating permissions helper, draggable app icon and startup toggles.
 
-Native actions currently support one-to-one iMessage chats. Read and delivery status reflect what Messages reports locally.
+Replies, Tapbacks, read and typing currently target direct chats. Group management and multipart sending use the native bridge. [Capability limits](docs/native-features.md) and local read/delivery observations stay explicit.
 
 ## How it works
 
-BBC runs alongside Messages in your signed-in macOS session. One Swift app hosts the HTTP API and handles native messaging actions. Create an API key in the app, then connect your bot or service to the Mac. Choose local-only access or allow connections from other devices.
+BBC runs alongside Messages in your signed-in macOS session. One Swift app hosts the HTTP API, manages keys and connects to its own embedded native messaging bridge. Create a key, start the API and connect your bot or service to the Mac.
+
+Advanced messaging needs a host configured for [native bridge access](docs/native-bridge.md), including SIP and library-validation settings. BBC reports the requirements and starts the bridge explicitly. It never automates the mouse, keyboard or Messages composer.
 
 ## Get started
 
@@ -31,7 +36,7 @@ cd BBC
 ./script/build_and_run.sh
 ```
 
-Sign into Messages, follow the permission checklist, create an API key and select **Start API**.
+Sign into Messages, follow the permission checklist, create an API key and select **Start API**. Enable the native bridge after completing its host setup.
 
 ```sh
 curl http://127.0.0.1:7861/v1/messages \

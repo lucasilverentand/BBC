@@ -43,6 +43,20 @@ final class DatabaseTests: XCTestCase {
             XCTAssertThrowsError(try database.confirmedReply(chat:chat,root:guid,text:"answer",after:before))
         }
     }
+    func testPrivateReactionConfirmationRequiresItsExactNewOwnEvent() throws {
+        try fixture { database,db in
+            XCTAssertEqual(sqlite3_exec(db,"ALTER TABLE message ADD COLUMN associated_message_emoji TEXT; ALTER TABLE message ADD COLUMN is_sent INTEGER; ALTER TABLE message ADD COLUMN error INTEGER",nil,nil,nil),SQLITE_OK)
+            let before = try database.maximumRowID(), event = "22222222-2222-4222-8222-222222222222"
+            let sql = "INSERT INTO message(guid,service,is_from_me,is_read,associated_message_type,associated_message_guid,associated_message_emoji,is_sent,error) VALUES('\(event)','iMessage',1,1,2006,'p:0/\(guid)','🦥',1,0); INSERT INTO chat_message_join VALUES(1,last_insert_rowid())"
+            XCTAssertEqual(sqlite3_exec(db,sql,nil,nil,nil),SQLITE_OK)
+            XCTAssertTrue(try database.confirmedNativeReaction(chat:chat,target:guid,sent:event,reaction:"🦥",remove:false,after:before))
+            XCTAssertFalse(try database.confirmedNativeReaction(chat:chat,target:guid,sent:event,reaction:"🎉",remove:false,after:before))
+            XCTAssertFalse(try database.confirmedNativeReaction(chat:chat,target:guid,sent:event,reaction:"🦥",remove:true,after:before))
+            XCTAssertFalse(try database.confirmedNativeReaction(chat:chat,target:guid,sent:event,reaction:"🦥",remove:false,after:try database.maximumRowID()))
+            XCTAssertEqual(sqlite3_exec(db,"UPDATE message SET is_from_me=0 WHERE guid='\(event)'",nil,nil,nil),SQLITE_OK)
+            XCTAssertFalse(try database.confirmedNativeReaction(chat:chat,target:guid,sent:event,reaction:"🦥",remove:false,after:before))
+        }
+    }
 
     func testNativeThreadRootAcceptsNonzeroPartWithoutCrossThreadConfirmation() throws {
         try fixture { database, db in

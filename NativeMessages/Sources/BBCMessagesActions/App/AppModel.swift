@@ -20,8 +20,14 @@ import CoreServices
     private let store: APIKeyStore?
     private var server: LocalAPIServer?
     private var router: APIRouter?
+    @ObservationIgnored private var webhookService: WebhookService?
+    @ObservationIgnored private var scheduleService: LocalScheduleService?
     private var lock: Int32 = -1
     private var listenerID = UUID()
+    @ObservationIgnored private let nativeHost = BridgeHost()
+    private(set) var nativeStarting = false
+    private(set) var nativeConnected = false
+    private(set) var nativeRequirements = "Checking native bridge requirements…"
     init() {
         do { let value = try APIKeyStore(); store = value; keys = value.keys }
         catch { store = nil; self.error = "Could not open the local API key store. Check its ownership and permissions." }
@@ -32,6 +38,7 @@ import CoreServices
             let port = UserDefaults.standard.object(forKey: "apiPort") as? Int ?? 7861
             start(port: port, allowNetwork: UserDefaults.standard.bool(forKey: "allowNetwork"))
         }
+        if UserDefaults.standard.bool(forKey:"startNativeBridgeOnLaunch") { startNativeBridge() }
     }
     func refreshLoginItem() {
         startAtLogin = LoginItem.enabled; loginNeedsApproval = LoginItem.needsApproval
@@ -43,15 +50,32 @@ import CoreServices
         catch { self.error = "Could not update Start at login. Check Blue Bubble Club in System Settings → General → Login Items." }
     }
     func refreshPermissions() { permissions = PermissionStatus.current() }
+    func refreshNativeBridge() {
+        Task {
+            let readiness = await Task.detached { BridgeReadiness.current() }.value
+            let status = await Task.detached { NativeBridgeClient.status() }.value
+            nativeConnected = status.object?["ready"]?.bool == true
+            if nativeConnected { nativeRequirements = "Native messaging connected. No mouse or keyboard automation." }
+            else if readiness.sip == .enabled { nativeRequirements = "Native messaging requires a host configured for private APIs. SIP is enabled. BBC does not change security settings." }
+            else if !readiness.allowed { nativeRequirements = "Native messaging host setup is incomplete. Check SIP and library validation in the setup guide." }
+            else { nativeRequirements = "Host requirements pass. Start the native bridge to connect Messages." }
+        }
+    }
+    func startNativeBridge() {
+        guard !nativeStarting else { return }; nativeStarting = true
+        Task {
+            defer { nativeStarting = false; refreshNativeBridge() }
+            do { try await nativeHost.start() }
+            catch { error = "Could not start the native bridge. Check host setup and whether Messages can quit. No UI fallback was used." }
+        }
+    }
+    func stopNativeBridge() { nativeHost.stop(); nativeConnected = false; refreshNativeBridge() }
     func showPermissionHelper() { refreshPermissions(); permissionHelper.show(model: self) }
     func closePermissionHelper() { permissionHelper.close() }
     func setUpPermission(_ step: PermissionStep) {
         showPermissionHelper()
         switch step {
         case .fullDiskAccess: NSWorkspace.shared.open(step.settingsURL)
-        case .accessibility:
-            requestAccessibility()
-            NSWorkspace.shared.open(step.settingsURL)
         case .automation:
             Task {
                 await requestAutomation(); refreshPermissions()
@@ -68,15 +92,12 @@ import CoreServices
             if status != noErr { error = "Messages Automation permission was not granted." }
         } catch { self.error = "Open Messages in this macOS account before allowing Automation." }
     }
-    func requestAccessibility() {
-        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
-    }
     func createKey(name: String) -> String? {
         do { guard let store else { throw ActionFailure.unavailable }; let secret = try store.create(name: name); keys = store.keys; return secret }
         catch { self.error = "Could not create an API key."; return nil }
     }
     func revoke(_ id: UUID) {
-        do { guard let store else { throw ActionFailure.unavailable }; try store.revoke(id); keys = store.keys; router?.stop() }
+        do { guard let store else { throw ActionFailure.unavailable }; try store.revoke(id); keys = store.keys; router?.keysChanged() }
         catch { self.error = "Could not revoke the API key." }
     }
     func start(port: Int, allowNetwork: Bool) {
@@ -89,14 +110,28 @@ import CoreServices
             lock = fd
             guard let executable = Bundle.main.executableURL else { throw ActionFailure.unavailable }
             let client = BBCClient(executable: executable, nativeExecutable: executable)
-            let router = APIRouter(keys: store) { try await client.request($0) }
+            // Reuse the stores across API restarts: an already dispatched send
+            // or webhook can finish after stop and must retain the same owner.
+            let webhooks: WebhookService
+            if let cached = webhookService { webhooks = cached }
+            else { webhooks = try WebhookService(keys:store); webhookService = webhooks }
+            let schedules: LocalScheduleService
+            if let cached = scheduleService { schedules = cached }
+            else {
+                schedules = try LocalScheduleService(directory:store.directory.appendingPathComponent("schedules",isDirectory:true),
+                    isKeyActive:{ id in store.keys.contains { $0.id == id } },execute:{ try await client.request($0) },
+                    mediaExpiresAt:{ id in try MediaStore(directory:store.directory.appendingPathComponent("media")).resolve(id).0.created.addingTimeInterval(MediaStore.lifetime) })
+                scheduleService = schedules
+            }
+            let router = APIRouter(keys:store,webhooks:webhooks,schedules:schedules) { try await client.request($0) }
             self.router = router
             let listener = try LocalAPIServer(host: allowNetwork ? "0.0.0.0" : "127.0.0.1", port: port, router: router)
             server = listener; starting = true; error = nil
             let generation = UUID(); listenerID = generation
             listener.start { [weak self] ready in Task { @MainActor in
                 guard let self, self.listenerID == generation else { return }; self.starting = false; self.running = ready
-                if !ready, self.server != nil { self.error = "The API listener stopped. Check the port and try again."; self.stop() }
+                if ready { self.router?.startServices() }
+                else if self.server != nil { self.error = "The API listener stopped. Check the port and try again."; self.stop() }
             } }
         } catch { stop(); self.error = "Could not start the local API. Check the port and whether another BBC instance is running." }
     }

@@ -1,0 +1,13 @@
+#import <Foundation/Foundation.h>
+
+NS_ASSUME_NONNULL_BEGIN
+typedef Class _Nullable (^BBCNativeClassResolver)(NSString *name);
+typedef void (^BBCNativeCompletion)(NSDictionary<NSString *, id> *result);
+
+/// Original BBC adapter. The resolver permits synthetic runtime fixtures;
+/// production always resolves Apple's classes inside the Messages process.
+FOUNDATION_EXPORT NSArray<NSString *> *BBCNativeCapabilities(BBCNativeClassResolver _Nullable resolver);
+FOUNDATION_EXPORT void BBCNativePerform(NSDictionary<NSString *, id> *request,
+                                       BBCNativeClassResolver _Nullable resolver,
+                                       BBCNativeCompletion completion);
+NS_ASSUME_NONNULL_END

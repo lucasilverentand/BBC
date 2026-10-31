@@ -5,6 +5,7 @@ struct ContentView: View {
     @Bindable var model: AppModel
     @AppStorage("apiPort") private var port = 7861
     @AppStorage("startAPIOnLaunch") private var startAPIOnLaunch = false
+    @AppStorage("startNativeBridgeOnLaunch") private var startNativeBridgeOnLaunch = false
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("allowNetwork") private var allowNetwork = false
     @State private var keyName = ""
@@ -31,6 +32,7 @@ struct ContentView: View {
             Section("Startup") {
                 Toggle("Start at login", isOn: Binding(get: { model.startAtLogin || model.loginNeedsApproval }, set: { value in Task { await model.setStartAtLogin(value) } })).disabled(model.updatingLogin)
                 Toggle("Start API when the app opens", isOn: $startAPIOnLaunch)
+                Toggle("Start native messaging when the app opens", isOn: $startNativeBridgeOnLaunch)
                 Text("The app starts after you sign into this Mac, when Messages can use your account.").font(.caption).foregroundStyle(.secondary)
                 if model.loginNeedsApproval {
                     Button("Approve in Login Items…") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!) }
@@ -50,18 +52,29 @@ struct ContentView: View {
                 }
                 Text("Keys allow messaging through this Mac. Their hashes stay on this Mac; each secret is shown once.").font(.caption).foregroundStyle(.secondary)
             }
+            Section("Native messaging") {
+                Text(model.nativeRequirements).font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button(model.nativeConnected ? "Stop native bridge" : "Start native bridge") {
+                        if model.nativeConnected { model.stopNativeBridge() } else { model.startNativeBridge() }
+                    }.disabled(model.nativeStarting)
+                    Button("Recheck") { model.refreshNativeBridge() }.disabled(model.nativeStarting)
+                    Link("Host setup",destination:URL(string:"https://github.com/lucasilverentand/BBC/blob/main/docs/native-bridge.md")!)
+                }
+                Text("Starting the bridge restarts Messages gracefully. No drafts are cleared.").font(.caption).foregroundStyle(.secondary)
+            }
             Section("Messages permissions") {
                 PermissionChecklistView(model: model)
                 HStack {
                     Button("Show setup helper") { model.showPermissionHelper() }
                     Button("Recheck") { model.refreshPermissions() }
                     Spacer()
-                    Text("\(model.permissions.grantedCount) of 3 ready").font(.caption).foregroundStyle(.secondary)
+                    Text("\(model.permissions.grantedCount) of \(PermissionStep.allCases.count) ready").font(.caption).foregroundStyle(.secondary)
                 }
             }
             if let error = model.error { Text(error).foregroundStyle(.red).font(.callout) }
         }.formStyle(.grouped)
-        .task { model.appOpened(); model.refreshLoginItem(); model.refreshPermissions() }
+        .task { model.appOpened(); model.refreshLoginItem(); model.refreshPermissions(); model.refreshNativeBridge() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { model.refreshLoginItem(); model.refreshPermissions() } }
         .sheet(isPresented: Binding(get: { newKey != nil }, set: { if !$0 { newKey = nil } })) {
             VStack(alignment: .leading, spacing: 16) {

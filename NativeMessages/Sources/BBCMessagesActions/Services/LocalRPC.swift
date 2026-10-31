@@ -26,10 +26,11 @@ import BBCClient
             switch method {
             case "status":
                 _ = try db.maximumRowID()
-                var methods = ["messages.after", "messages.status", "media.download"]
+                var methods = ["messages.after", "messages.status", "messages.search", "media.download"]
                 if NativeMessagesStartup.automationStatus() == noErr { methods.append("send") }
                 result = .object(["version": .string("bbc-1"), "methods": .array(methods.map(BBCJSONValue.string))])
             case "messages.after": result = try db.page(parameters)
+            case "messages.search": result = try db.search(parameters)
             case "messages.status": result = try db.messageStatus(parameters)
             case "media.download": result = try db.download(parameters)
             case "send": result = try await send(parameters, database: db)
