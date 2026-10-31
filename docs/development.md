@@ -25,7 +25,7 @@ Check the Mac's session before diagnosing UI code. A locked session can retain A
 The internal `BBC_TEST_FULL_EMOJI_PICKER` environment variable supports native diagnosis:
 
 - `1` forces the full picker even when the same emoji becomes recent.
-- `observe` prepares the exact picker and stops before activation. It deliberately returns a pre-dispatch failure and leaves that picker open for a native reproducer.
+- `observe` prepares the exact picker and stops before activation. It deliberately returns a pre-dispatch failure; the synchronous reset then dismisses the picker. This exercises failure cleanup without submitting a reaction.
 - Unset uses the normal API path.
 
 `NativeEmojiPicker` logs expose fixed role/action information without message content, search terms or recipient identities. Confirm the resulting own-reaction event against the exact target, then test removal. Recipient-visible acceptance remains separate from local confirmation.

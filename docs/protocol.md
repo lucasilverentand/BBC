@@ -5,6 +5,7 @@
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `status` | local + native status | Report observed capabilities and existing permissions |
+| `ui.reset` | native, no parameters | Dismiss transient UI and verify a clean composer without sending or discarding personal drafts |
 | `messages.after` | read-only SQLite verification | Read a cursor page and verify service/thread/attachment metadata |
 | `send` | local Apple Events | Send text or an opaque local media upload with explicit recipient and service |
 | `send` with `params.reply_to` | native `reply` | Reply to an exact message |

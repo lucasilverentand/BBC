@@ -2,6 +2,28 @@ import XCTest
 import IMessage
 
 final class EmojiPickerActivationTests: XCTestCase {
+    func testPickerNavigationNeedsExactObservedSelectionBeforeConfirmation() throws {
+        var navigations = 0, reads = 0, confirmed = false
+        try BBCNativeEmojiActivation.selectForConfirmation(owned: { true }, navigate: { navigations += 1 }, selected: { reads += 1; return reads >= 3 })
+        confirmed = true
+        XCTAssertTrue(confirmed); XCTAssertEqual(navigations, 1); XCTAssertEqual(reads, 3)
+    }
+
+    func testUnknownPickerSelectionCannotConfirmOrRepeatNavigation() {
+        var navigations = 0, confirmed = false
+        XCTAssertThrowsError(try {
+            try BBCNativeEmojiActivation.selectForConfirmation(owned: { true }, navigate: { navigations += 1 }, selected: { false })
+            confirmed = true
+        }())
+        XCTAssertFalse(confirmed); XCTAssertEqual(navigations, 1)
+    }
+
+    func testChangedPickerStopsBeforeAnyNavigation() {
+        var navigated = false
+        XCTAssertThrowsError(try BBCNativeEmojiActivation.selectForConfirmation(owned: { false }, navigate: { navigated = true }, selected: { true }))
+        XCTAssertFalse(navigated)
+    }
+
     func testChangedSearchStopsBeforeAnyActivation() {
         var reads = 0, activations = 0
         XCTAssertThrowsError(try {

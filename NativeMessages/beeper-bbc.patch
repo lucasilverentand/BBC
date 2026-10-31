@@ -28,6 +28,21 @@ index 14b5d962..1e372ee8 100644
  
      static func resetPrompts() {
          // getUserDefaults(bundleID: messagesBundleID)?.set(true, forKey: "kHasSetupHashtagImages") // unknown
+diff --git a/src/IMessage/Sources/IMessage/KeyPresser.swift b/src/IMessage/Sources/IMessage/KeyPresser.swift
+index 2141b131..7e053018 100644
+--- a/src/IMessage/Sources/IMessage/KeyPresser.swift
++++ b/src/IMessage/Sources/IMessage/KeyPresser.swift
+@@ -61,6 +61,10 @@ class KeyPresser {
+         try press(key: CGKeyCode(kVK_Return), onMainThread: onMainThread)
+     }
+ 
++    func escape(onMainThread: Bool = true) throws {
++        try press(key: CGKeyCode(kVK_Escape), onMainThread: onMainThread)
++    }
++
+     func downArrow(onMainThread: Bool = true) throws {
+         try press(key: CGKeyCode(kVK_DownArrow), onMainThread: onMainThread)
+     }
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift b/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
 index 936ae9fc..e1f61283 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesAppElements.swift
@@ -140,7 +155,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..dce7646f 100644
+index bb6ae980..d10246b8 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -474,7 +489,7 @@ index bb6ae980..dce7646f 100644
              guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
                  guard let cell = try messageCell.overlay
                          ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
-@@ -750,85 +778,163 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -750,85 +778,187 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -627,6 +642,30 @@ index bb6ae980..dce7646f 100644
 +                    let rawRole = (try? choice.element.role()) ?? "unknown"
 +                    let role = ["AXUnknown", "AXButton", "AXCell", "AXStaticText", "AXImage", "AXTextField"].contains(rawRole) ? rawRole : "other"
 +                    let logger = os.Logger(subsystem: "club.bluebubble.transport", category: "NativeEmojiPicker")
++                    if role == "AXUnknown", search.position == 0 {
++                        phase = .choice
++                        try BBCNativeEmojiActivation.selectForConfirmation(owned: ownsSearch, navigate: {
++                            try searchField.isFocused(assign: true)
++                            guard ownsSearch(), (try? searchField.isFocused()) == true else { throw BBCNativeReactionFailure.choice }
++                            try self.keyPresser.downArrow()
++                        }, selected: {
++                            // Layout rows may contain several results. Only a
++                            // selected container containing this one glyph is proof.
++                            ([choice.element] + ancestors).contains { node in
++                                guard (try? node.isSelected()) == true else { return false }
++                                let glyphs = ([node] + Array(node.recursiveChildren())).filter { child in
++                                    (try? child.role()) == "AXUnknown" && ((try? child.supportedActions())?.contains { $0.name.value == "AXPress" }) == true
++                                }
++                                return glyphs.count == 1 && glyphs[0] == choice.element
++                            }
++                        })
++                        logger.notice("Exact emoji selected by owned picker navigation")
++                        guard !observeOnly, ownsSearch() else { throw BBCNativeReactionFailure.choice }
++                        phase = .apply
++                        try self.keyPresser.return()
++                        logger.notice("Exact emoji confirmation dispatched to Messages process")
++                        return
++                    }
 +                    if observeOnly {
 +                        logger.notice("Emoji picker ready for native observation; no activation dispatched")
 +                        throw BBCNativeReactionFailure.choice
@@ -683,13 +722,13 @@ index bb6ae980..dce7646f 100644
 +                                return identifier == reaction.idOrEmoji
 +                            }
 +                            .orThrow(ErrorMessage("Could not find \(on ? "react" : "unreact") button"))
-                     }
++                    }
 +    
 +                    let idx = reaction.index!
 +                    let buttons = try elements.reactButtons
 +                    guard buttons.count > idx else {
 +                        throw ErrorMessage("reactButtons count=\(buttons.count)")
-+                    }
+                     }
 +    
 +                    return buttons[idx]
 +                }()
@@ -710,7 +749,7 @@ index bb6ae980..dce7646f 100644
      }
  
      func undoSend(threadID: String, messageCell: MessageCell) throws {
-@@ -994,6 +1100,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -994,6 +1124,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
       3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
       4. threadCell.press() action hack                                       (unreliable)
       */
@@ -735,7 +774,7 @@ index bb6ae980..dce7646f 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1205,216 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1229,217 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -781,7 +820,8 @@ index bb6ae980..dce7646f 100644
 +        if let picker = try elements.visibleCharacterPicker {
 +            try BBCNativeUICycle.dismiss(visible: { try self.elements.visibleCharacterPicker == picker }) {
 +                try emptyComposer()
-+                try picker.cancel()
++                guard try self.elements.visibleCharacterPicker == picker else { throw BBCNativeResetFailure.picker }
++                try self.keyPresser.escape()
 +            }
 +        }
 +        if let bar = try elements.currentTapbackPicker {
@@ -952,7 +992,7 @@ index bb6ae980..dce7646f 100644
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1446,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1471,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -968,7 +1008,7 @@ index bb6ae980..dce7646f 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1924,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1949,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
@@ -979,7 +1019,7 @@ index bb6ae980..dce7646f 100644
  
      deinit {
 diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
-index 24ae4ff3..605c7c25 100644
+index 24ae4ff3..0f54d4f5 100644
 --- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
 +++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
 @@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
@@ -991,7 +1031,7 @@ index 24ae4ff3..605c7c25 100644
          state.database = db
          return db
      }
-@@ -63,6 +63,165 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
+@@ -63,6 +63,179 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
  ///
  /// `IMessageHost` owns singleton process state, so callers should create only one
  /// PlatformAPI instance per process and share it across wrapper surfaces.
@@ -1009,6 +1049,20 @@ index 24ae4ff3..605c7c25 100644
 +
 +/// Use only advertised actions on the exact glyph; never send a global Return.
 +public enum BBCNativeEmojiActivation {
++    /// Navigation cannot commit a reaction. Confirm only a freshly observed
++    /// exact selection in the still-owned picker; never fall back to a press.
++    public static func selectForConfirmation(owned: () -> Bool, navigate: () throws -> Void, selected: () -> Bool) throws {
++        guard owned() else { throw BBCNativeReactionFailure.choice }
++        try navigate()
++        let deadline = Date().addingTimeInterval(0.75)
++        repeat {
++            guard owned() else { throw BBCNativeReactionFailure.choice }
++            if selected() { return }
++            Thread.sleep(forTimeInterval: 0.05)
++        } while Date() < deadline
++        throw BBCNativeReactionFailure.choice
++    }
++
 +    /// Match the native adapter's search-settling boundary. A rendered glyph
 +    /// alone does not establish that the character picker has finished updating.
 +    public static func waitForSearch(owned: () -> Bool) throws {
@@ -1157,7 +1211,7 @@ index 24ae4ff3..605c7c25 100644
  public final class PlatformAPI {
      private static let activeInstance = Protected<ObjectIdentifier?>()
  
-@@ -384,6 +543,64 @@ public final class PlatformAPI {
+@@ -384,6 +557,64 @@ public final class PlatformAPI {
          try await withMessagesController { try $0.undoSend(threadID: threadID, messageID: messageID) }
      }
  
