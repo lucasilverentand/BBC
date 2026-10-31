@@ -1,5 +1,13 @@
 # Blue Bubble Club
 
+## Project knowledge
+
+Start at [project guidance](docs/project-guidance.md) and read only the relevant linked topic. Keep accepted project requirements, decisions, reusable technical knowledge and agent instructions with the source. Use Notion for global/cross-project guidance and planning, and Linear for delivery and acceptance. Preserve proposal status, historical dates and outstanding acceptance gates. Do not treat a migration or past authorization as permission for new runtime operations.
+
+This repository is public. Exclude personal account identities, private messaging data, credentials and operator infrastructure details from committed guidance.
+
+## Native adapter work
+
 Read [README.md](README.md) for the product and build entry point, [docs/api.md](docs/api.md) for API contracts, and [docs/development.md](docs/development.md) for native-adapter work.
 
 - Keep BBC a standalone, self-hosted Mac app: one Swift executable, an embedded API and app-managed keys. Operators own network exposure. Keep execution local to the signed-in Mac.
@@ -9,5 +17,3 @@ Read [README.md](README.md) for the product and build entry point, [docs/api.md]
 - Distinguish CI, observed native state and recipient-visible acceptance. Accessibility permission alone does not establish a usable Messages window.
 - Preserve the saved composition in `Assets/AppIcon.icon` and the app's stable signing identity when rebuilding or replacing the executable.
 - The pinned adapter cache in `build/beeper-imessage` is generated. Persist adapter edits in `NativeMessages/beeper-bbc.patch`; follow the preparation script's patch checks.
-
-Keep accepted project contracts and reusable native findings in these repository docs. Keep changing delivery and live acceptance in the issue tracker.

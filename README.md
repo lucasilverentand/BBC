@@ -46,3 +46,7 @@ Use a new UUID for each operation; reuse it when retrying the same request.
 [API guide](docs/api.md) · [Protocol](docs/protocol.md) · [Swift SDK](Sources/BBCClient)
 
 [MIT license](LICENSE) · [Third-party notices](NOTICE)
+
+## Project guidance
+
+See [project guidance](docs/project-guidance.md) for accepted requirements, decisions and technical context. Maintain project knowledge with the source; Notion holds global/cross-project guidance and planning, and Linear tracks delivery and acceptance.
