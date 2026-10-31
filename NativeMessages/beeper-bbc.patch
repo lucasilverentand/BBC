@@ -29,9 +29,18 @@ index 14b5d962..1e372ee8 100644
      static func resetPrompts() {
          // getUserDefaults(bundleID: messagesBundleID)?.set(true, forKey: "kHasSetupHashtagImages") // unknown
 diff --git a/src/IMessage/Sources/IMessage/KeyPresser.swift b/src/IMessage/Sources/IMessage/KeyPresser.swift
-index 2141b131..7e053018 100644
+index 2141b131..534e1b1b 100644
 --- a/src/IMessage/Sources/IMessage/KeyPresser.swift
 +++ b/src/IMessage/Sources/IMessage/KeyPresser.swift
+@@ -35,7 +35,7 @@ class KeyPresser {
+             // all events will not be posted for _some_ users if `keyboardEventSource` is nil
+             let ev = try CGEvent(keyboardEventSource: Self.src, virtualKey: key, keyDown: keyDown)
+                 .orThrow(ErrorMessage("key \(key) event empty"))
+-            if let flags { ev.flags = flags }
++            ev.flags = flags ?? []
+             ev.postToPid(self.pid)
+             if isSequoiaOrUp, !keyDown { // workaround courtesy https://github.com/pmanot
+                 ev.flags = []
 @@ -61,6 +61,10 @@ class KeyPresser {
          try press(key: CGKeyCode(kVK_Return), onMainThread: onMainThread)
      }
@@ -155,7 +164,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..d10246b8 100644
+index bb6ae980..f06e512a 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -489,7 +498,7 @@ index bb6ae980..d10246b8 100644
              guard let selected = (try retry(withTimeout: 1, interval: 0.2) { () -> Accessibility.Element? in
                  guard let cell = try messageCell.overlay
                          ? MessagesAppElements.firstMessageCell(in: elements.replyTranscriptView)
-@@ -750,85 +778,187 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -750,85 +778,193 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -601,7 +610,7 @@ index bb6ae980..d10246b8 100644
 +                            ((try? searchField.value()) as? String) == search.query
 +                    }
 +                    func ownsSearch() -> Bool { unchangedSearch() && self.elements.isVisibleCharacterPicker(picker) }
-+                    defer { if !observeOnly, ownsSearch() { try? picker.cancel() } }
++                    defer { if !self.bbcSynchronousCleanup, !observeOnly, ownsSearch() { try? picker.cancel() } }
 +                    try BBCNativeEmojiActivation.waitForSearch(owned: unchangedSearch)
 +                    phase = .choice
 +                    let choice = try retry(withTimeout: 2, interval: 0.1) {
@@ -645,13 +654,17 @@ index bb6ae980..d10246b8 100644
 +                    if role == "AXUnknown", search.position == 0 {
 +                        phase = .choice
 +                        try BBCNativeEmojiActivation.selectForConfirmation(owned: ownsSearch, navigate: {
-+                            try searchField.isFocused(assign: true)
-+                            guard ownsSearch(), (try? searchField.isFocused()) == true else { throw BBCNativeReactionFailure.choice }
++                            func searchIsFocused() -> Bool {
++                                (try? self.elements.app.focusedElement()) == searchField || (try? searchField.isFocused()) == true
++                            }
++                            if !searchIsFocused() { try searchField.isFocused(assign: true) }
++                            guard ownsSearch(), searchIsFocused() else { throw BBCNativeReactionFailure.choice }
 +                            try self.keyPresser.downArrow()
 +                        }, selected: {
++                            if (try? self.elements.app.focusedElement()) == choice.element { return true }
 +                            // Layout rows may contain several results. Only a
 +                            // selected container containing this one glyph is proof.
-+                            ([choice.element] + ancestors).contains { node in
++                            return ([choice.element] + ancestors).contains { node in
 +                                guard (try? node.isSelected()) == true else { return false }
 +                                let glyphs = ([node] + Array(node.recursiveChildren())).filter { child in
 +                                    (try? child.role()) == "AXUnknown" && ((try? child.supportedActions())?.contains { $0.name.value == "AXPress" }) == true
@@ -664,6 +677,8 @@ index bb6ae980..d10246b8 100644
 +                        phase = .apply
 +                        try self.keyPresser.return()
 +                        logger.notice("Exact emoji confirmation dispatched to Messages process")
++                        let closingDeadline = Date().addingTimeInterval(0.75)
++                        while ownsSearch(), Date() < closingDeadline { Thread.sleep(forTimeInterval: 0.05) }
 +                        return
 +                    }
 +                    if observeOnly {
@@ -749,7 +764,7 @@ index bb6ae980..d10246b8 100644
      }
  
      func undoSend(threadID: String, messageCell: MessageCell) throws {
-@@ -994,6 +1124,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -994,6 +1130,24 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
       3. when less than 9 pinned threads: pin thread, #2, unpin               (reliable)
       4. threadCell.press() action hack                                       (unreliable)
       */
@@ -774,7 +789,7 @@ index bb6ae980..d10246b8 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1229,217 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1235,217 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
@@ -992,7 +1007,7 @@ index bb6ae980..d10246b8 100644
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1471,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1477,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -1008,7 +1023,7 @@ index bb6ae980..d10246b8 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1949,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1955,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
