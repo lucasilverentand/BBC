@@ -140,7 +140,7 @@ index 1998f6d7..63aee563 100644
          let isReply: Bool = message.threadOriginatorGUID != nil
          let overlay: Bool = allowOverlay && isMontereyOrUp && !isReply
 diff --git a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
-index bb6ae980..e17f67a6 100644
+index bb6ae980..dce7646f 100644
 --- a/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 +++ b/src/IMessage/Sources/IMessage/Messages/MessagesController.swift
 @@ -1,3 +1,4 @@
@@ -735,16 +735,16 @@ index bb6ae980..e17f67a6 100644
      func toggleThreadRead(threadID: String, read: Bool) throws {
          let startTime = Date()
          defer { log.debug("toggleThreadRead took \(startTime.timeIntervalSinceNow * -1000)ms") }
-@@ -1081,6 +1205,208 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1081,6 +1205,216 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          }
      }
  
-+    private var bbcOwnedComposer: (field: Accessibility.Element, window: Accessibility.Element, row: Accessibility.Element, text: String)?
++    private var bbcOwnedComposer: (field: Accessibility.Element, window: Accessibility.Element, row: Accessibility.Element, text: String, submitted: Bool)?
 +
 +    private func bbcAssignOwnedText(_ field: Accessibility.Element, text: String) throws {
 +        guard try messageFieldValue(field).isEmpty,
 +              let row = elements.selectedThreadCell else { throw BBCNativeResetFailure.draft }
-+        bbcOwnedComposer = (field, try elements.mainWindow, row, text)
++        bbcOwnedComposer = (field, try elements.mainWindow, row, text, false)
 +        try assignToMessageField(field, text: text)
 +    }
 +
@@ -758,9 +758,15 @@ index bb6ae980..e17f67a6 100644
 +        guard Self.isOwnUserProcess(app), try elements.mainWindow.pid() == app.processIdentifier,
 +              (try? elements.alertSheet) == nil else { throw BBCNativeResetFailure.window }
 +        if let owner = bbcOwnedComposer {
-+            try BBCNativeOwnedComposer.clear(expected: owner.text, owns: {
++            let owns = {
 +                try self.elements.mainWindow == owner.window && self.elements.messageBodyField == owner.field && self.elements.selectedThreadCell == owner.row
-+            }, read: { try self.messageFieldValue(owner.field) }, clear: { try owner.field.value(assign: "") })
++            }
++            let read = { try self.messageFieldValue(owner.field) }
++            if owner.submitted {
++                try BBCNativeOwnedComposer.waitForSend(expected: owner.text, owns: owns, read: read)
++            } else {
++                try BBCNativeOwnedComposer.clear(expected: owner.text, owns: owns, read: read, clear: { try owner.field.value(assign: "") })
++            }
 +            bbcOwnedComposer = nil
 +        }
 +        func emptyComposer() throws {
@@ -854,6 +860,7 @@ index bb6ae980..e17f67a6 100644
 +                guard try messageFieldValue(field) == text else { throw phase }
 +                focusMessageField(field)
 +                phase = .send
++                bbcOwnedComposer?.submitted = true
 +                try keyPresser.return()
 +            }
 +        } catch { throw phase }
@@ -883,6 +890,7 @@ index bb6ae980..e17f67a6 100644
 +            guard selectedRow != nil, elements.selectedThreadCell == selectedRow,
 +                  try elements.mainWindow.title() == selectedTitle else { throw BBCNativeReplyFailure.selection }
 +            focusMessageField(field)
++            bbcOwnedComposer?.submitted = true
 +            try keyPresser.return()
 +        }
 +    }
@@ -944,7 +952,7 @@ index bb6ae980..e17f67a6 100644
      func sendTypingStatus(threadID: String) throws {
          // a space is enough to send a typing indicator, while ensuring that
          // users can't accidentally hit return to send a single-char message
-@@ -1112,13 +1438,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1112,13 +1446,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
  
      private func messageFieldValue(_ messageField: Accessibility.Element) throws -> String {
          do {
@@ -960,7 +968,7 @@ index bb6ae980..e17f67a6 100644
          } catch {
              if error is AccessibilityError, let axError = error as? AccessibilityError, axError.code == .noValue { return "" }
              throw error
-@@ -1595,7 +1916,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
+@@ -1595,7 +1924,8 @@ isMessagesAppResponsive=\(isMessagesAppResponsive)
          lifecycleConveyor?.cancel()
          lifecycleEventsTask?.cancel()
  
@@ -971,7 +979,7 @@ index bb6ae980..e17f67a6 100644
  
      deinit {
 diff --git a/src/IMessage/Sources/IMessage/PlatformAPI.swift b/src/IMessage/Sources/IMessage/PlatformAPI.swift
-index 24ae4ff3..c331eb02 100644
+index 24ae4ff3..89361061 100644
 --- a/src/IMessage/Sources/IMessage/PlatformAPI.swift
 +++ b/src/IMessage/Sources/IMessage/PlatformAPI.swift
 @@ -49,7 +49,7 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
@@ -983,7 +991,7 @@ index 24ae4ff3..c331eb02 100644
          state.database = db
          return db
      }
-@@ -63,6 +63,152 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
+@@ -63,6 +63,165 @@ private final class PlatformAPIDatabase: @unchecked Sendable {
  ///
  /// `IMessageHost` owns singleton process state, so callers should create only one
  /// PlatformAPI instance per process and share it across wrapper surfaces.
@@ -1069,6 +1077,19 @@ index 24ae4ff3..c331eb02 100644
 +}
 +
 +public enum BBCNativeOwnedComposer {
++    /// A posted Return may not have been consumed yet. Never erase a pending send.
++    public static func waitForSend(expected: String, owns: () throws -> Bool, read: () throws -> String) throws {
++        let deadline = Date().addingTimeInterval(1)
++        repeat {
++            guard try owns() else { throw BBCNativeResetFailure.verification }
++            let value = try read()
++            if value.isEmpty { return }
++            guard value == expected else { throw BBCNativeResetFailure.draft }
++            Thread.sleep(forTimeInterval: 0.05)
++        } while Date() < deadline
++        throw BBCNativeResetFailure.verification
++    }
++
 +    public static func clear(expected: String, owns: () throws -> Bool, read: () throws -> String, clear: () throws -> Void) throws {
 +        guard try owns() else { throw BBCNativeResetFailure.verification }
 +        let value = try read()
@@ -1136,7 +1157,7 @@ index 24ae4ff3..c331eb02 100644
  public final class PlatformAPI {
      private static let activeInstance = Protected<ObjectIdentifier?>()
  
-@@ -384,6 +530,64 @@ public final class PlatformAPI {
+@@ -384,6 +543,64 @@ public final class PlatformAPI {
          try await withMessagesController { try $0.undoSend(threadID: threadID, messageID: messageID) }
      }
  

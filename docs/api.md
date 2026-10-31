@@ -79,8 +79,6 @@ Read opens one verified message in its owned Messages process, then observes the
 
 Start returns an accepted session UUID promptly. A session lasts at most 30 seconds. Stop requests cancellation and cleanup of that session's own placeholder. Retrieve the start operation's receipt to see the eventual native result. An accepted start is not confirmation that the recipient saw typing, and a stop request is not proof of placeholder cleanup. Native failure receipts retain uncertainty. Starting another session while automation is owned can fail busy.
 
-## Operation receipts and custody
-
 ## UI reset
 
 Reply, link and Tapback operations synchronously reset their UI before and after acting. Typing resets before starting and confirms cleanup when the session ends, including a partial startup failure. `/v1/ui/reset` exposes the same reset independently; it requires an operation UUID and returns `ui_state: "clean"` only after observing an empty composer with no emoji picker, reaction bar or reply overlay.
@@ -88,6 +86,8 @@ Reply, link and Tapback operations synchronously reset their UI before and after
 Reset dismisses transient controls through their native cancel actions. It never sends, repeats a reaction, restarts Messages or deletes a personal draft. Only unchanged text in the same editor and conversation, owned by the current BBC operation, may be cleared. Changed text/selection, an unreadable window, or an orphaned draft from an older worker blocks reset. Cleanup failures report `ui_state: "blocked"`; a completed send can remain uncertain while cleanup is unconfirmed. Reconcile the saved receipt rather than issuing a new send. A successful reset does not resolve an earlier uncertain operation.
 
 Typing stop still returns `cleanup: "requested"` promptly. Read the typing-start operation's final receipt for `cleanup: "confirmed"`; an accepted start or requested stop alone does not establish a clean composer.
+
+## Operation receipts and custody
 
 Local records live in `~/Library/Application Support/Blue Bubble Club` with private directory/file permissions. Keys are stored as SHA-256 hashes of 256-bit random secrets; operation records retain request fingerprints and receipts. Uncertain records deliberately survive restarts. There is no automatic expiry or replay of retained operations.
 

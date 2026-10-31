@@ -5,6 +5,18 @@ import IMessage
 @MainActor final class NativeUIResetTests: XCTestCase {
     enum Failure: Error { case action, cleanup }
 
+    func testSubmittedSendIsObservedUntilTheNativeComposerEmpties() throws {
+        var reads = 0
+        try BBCNativeOwnedComposer.waitForSend(expected: "pending", owns: { true }, read: { reads += 1; return reads < 3 ? "pending" : "" })
+        XCTAssertEqual(reads, 3)
+    }
+
+    func testOperatorEditDuringSendSettlementStopsCleanup() {
+        XCTAssertThrowsError(try BBCNativeOwnedComposer.waitForSend(expected: "pending", owns: { true }, read: { "operator edit" })) {
+            XCTAssertEqual($0 as? BBCNativeResetFailure, .draft)
+        }
+    }
+
     func testOwnedComposerCleanupPreservesOperatorEditsAndChangedSelections() {
         for (value, owns) in [("personal text", true), (" ", false)] {
             var cleared = false
