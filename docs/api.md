@@ -9,6 +9,7 @@ Every mutation requires an `Idempotency-Key` header containing a UUID chosen and
 | Route | Body / result |
 | --- | --- |
 | `GET /v1/status` | Observed permissions and available methods |
+| `POST /v1/ui/reset` | Empty object `{}`; dismiss transient messaging UI and confirm a clean composer, preserving personal drafts |
 | `POST /v1/messages` | `to`, either `text` or uploaded `media_id`; always iMessage, SMS fallback disabled |
 | `POST /v1/messages/after` | `since_rowid`, `limit` (1–200), optional exact `chat_guid`; incremental messages and `next_rowid` |
 | `POST /v1/messages/status` | `chat_guid`, `message_guid`; observed local sent/delivered/read flags |
@@ -54,6 +55,8 @@ Send `{"to":"person@example.com","media_id":"<returned UUID>"}` to `/v1/messages
 
 Request message pages with `attachments: true` to receive opaque attachment GUIDs, MIME types and byte counts; `is_audio_message` identifies native audio messages. `/v1/media/download` returns original bytes as `data_base64`, with `offset`, `next_offset`, `total_bytes` and `complete`. Request successive offsets until complete. Each chunk is at most 512 KiB; each attachment is at most 32 MiB. Downloads require the exact direct-chat/message/attachment tuple and a local file already available in Messages. Paths and remote download URLs are never accepted. Both sent and received attachments can be downloaded.
 
+Local visual preparation (`/v1/media/visual`) and audio transcription (`/v1/media/transcribe`) accept received attachments only. Transcription also requires locally staged models; check `/v1/status` for availability.
+
 ## Rich links
 
 Send `{"chat_guid":"…","message_guid":"…","url":"https://example.com","read_guids":["…"]}` to `/v1/links` with an operation UUID. The anchor must be a message in the intended direct chat, and `read_guids` must cover its current unread messages. BBC uses the native composer once, preserves existing drafts, and rejects an open reply composer. Messages generates the preview; `preview: "managed-by-messages"` does not guarantee the site supplies a card or the recipient sees one. Plain URL text can also be sent through `/v1/messages`.
@@ -68,13 +71,21 @@ Reply with the exact message GUID and chat GUID. The native adapter resolves and
 
 ## Tapbacks and read state
 
-Tapbacks accept `love`, `like`, `dislike`, `laugh`, `emphasis`, `question`, or a single emoji such as `🎉` or `👩‍💻`. Set `remove: true` to remove your exact reaction, using the same `/v1/tapbacks` endpoint and a new operation UUID. Reaction targets include Apple’s balloon references; `reacted_to_guid` is the normalized UUID and `reacted_to_native_guid` preserves the original reference. Message pages expose custom emoji as `reaction_emoji` alongside native add/removal types. Picker availability depends on the Mac’s emoji support; confirmation checks the exact emoji, including modifiers. The target is an exact UUID message in a verified direct iMessage chat. Custom emoji already available in the native Tapback bar use their exact button, with the selected state verified after at most one press. Other custom emoji use the character picker and retain database confirmation. Removal checks the exact native picker button even when the database has no matching own-reaction row. It presses only a selected button and confirms its unselected state; `confirmation: "native-ui"` identifies an observed native selection state; it is not recipient-delivery confirmation. Unavailable or unconfirmed UI state returns failure rather than a successful no-op. Setting an already present reaction is a no-op; the helper never repeats a button press to recover missing confirmation.
+Tapbacks accept `love`, `like`, `dislike`, `laugh`, `emphasis`, `question`, or a single emoji such as `🎉` or `👩‍💻`. Set `remove: true` to remove your exact reaction, using the same `/v1/tapbacks` endpoint and a new operation UUID. Reaction targets include Apple’s balloon references; `reacted_to_guid` is the normalized UUID and `reacted_to_native_guid` preserves the original reference. Message pages expose custom emoji as `reaction_emoji` alongside native add/removal types. Picker availability depends on the Mac’s emoji support; confirmation checks the exact emoji, including modifiers. Permission status alone does not establish picker readiness; a locked session can hide its native controls. The target is an exact UUID message in a verified direct iMessage chat. Custom emoji already available in the native Tapback bar use their exact button, with the selected state verified after at most one press. Other custom emoji use advertised activation actions in the character picker and retain exact database confirmation. Selecting a glyph alone is not reported as a successful Tapback; the unchanged picker opened by the operation is cleaned up afterward. Removal checks the exact native picker button even when the database has no matching own-reaction row. It presses only a selected button and confirms its unselected state; `confirmation: "native-ui"` identifies an observed native selection state; it is not recipient-delivery confirmation. Unavailable or unconfirmed UI state returns failure rather than a successful no-op. Setting an already present reaction is a no-op; the helper never repeats a button press to recover missing confirmation.
 
 Read opens one verified message in its owned Messages process, then observes the local database. Apple may mark the conversation read as a side effect. A local read confirmation is not proof that the sender saw Apple's Read receipt. `messages.status` reports only the database flags the Mac actually observed; unknown remote visibility must stay unknown.
 
 ## Typing
 
 Start returns an accepted session UUID promptly. A session lasts at most 30 seconds. Stop requests cancellation and cleanup of that session's own placeholder. Retrieve the start operation's receipt to see the eventual native result. An accepted start is not confirmation that the recipient saw typing, and a stop request is not proof of placeholder cleanup. Native failure receipts retain uncertainty. Starting another session while automation is owned can fail busy.
+
+## UI reset
+
+Reply, link and Tapback operations synchronously reset their UI before and after acting. Typing resets before starting and confirms cleanup when the session ends, including a partial startup failure. `/v1/ui/reset` exposes the same reset independently; it requires an operation UUID and returns `ui_state: "clean"` only after observing an empty composer with no emoji picker, reaction bar or reply overlay.
+
+Reset dismisses transient controls through their native cancel actions. It never sends, repeats a reaction, restarts Messages or deletes a personal draft. Only unchanged text in the same editor and conversation, owned by the current BBC operation, may be cleared. Changed text/selection, an unreadable window, or an orphaned draft from an older worker blocks reset. Cleanup failures report `ui_state: "blocked"`; a completed send can remain uncertain while cleanup is unconfirmed. Reconcile the saved receipt rather than issuing a new send. A successful reset does not resolve an earlier uncertain operation.
+
+Typing stop still returns `cleanup: "requested"` promptly. Read the typing-start operation's final receipt for `cleanup: "confirmed"`; an accepted start or requested stop alone does not establish a clean composer.
 
 ## Operation receipts and custody
 

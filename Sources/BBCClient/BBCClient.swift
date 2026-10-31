@@ -29,7 +29,7 @@ public struct BBCClient: Sendable {
         if payload.object?["method"]?.string == "send", payload.object?["params"]?.object?["reply_to"] != nil {
             var request = payload.object!; request["method"] = .string("reply"); return try await nativeRequest(.object(request))
         }
-        if ["reply", "link", "tapback", "read", "read.status", "media.transcribe", "media.visual"].contains(payload.object?["method"]?.string ?? "") {
+        if ["ui.reset", "reply", "link", "tapback", "read", "read.status", "media.transcribe", "media.visual"].contains(payload.object?["method"]?.string ?? "") {
             return try await nativeRequest(payload)
         }
         let result = try await legacyRequest(payload)
@@ -37,10 +37,10 @@ public struct BBCClient: Sendable {
         // The old injected-helper reaction is never a substitute for this adapter.
         let oldMethods: [BBCJSONValue]
         if case .array(let values) = status["methods"] { oldMethods = values } else { oldMethods = [] }
-        var methods = oldMethods.compactMap(\.string).filter { !["tapback", "read", "media.transcribe", "media.visual", "reply", "link", "typing"].contains($0) }
+        var methods = oldMethods.compactMap(\.string).filter { !["ui.reset", "tapback", "read", "media.transcribe", "media.visual", "reply", "link", "typing"].contains($0) }
         if let native = try? await nativeRequest(.object(["method": .string("status")])),
            case .array(let ready) = native.object?["methods"] {
-            methods += ready.compactMap(\.string).filter { ["tapback", "read", "media.transcribe", "media.visual", "reply", "link", "typing"].contains($0) }
+            methods += ready.compactMap(\.string).filter { ["ui.reset", "tapback", "read", "media.transcribe", "media.visual", "reply", "link", "typing"].contains($0) }
             status["native_accessibility"] = native.object?["accessibility"]
             status["native_automation"] = native.object?["automation"]
         }

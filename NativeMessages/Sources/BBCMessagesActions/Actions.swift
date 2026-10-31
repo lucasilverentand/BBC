@@ -9,6 +9,7 @@ struct BBCMessagesActions {
     @MainActor static func main() async {
         var receipt: [String: Any] = ["ok": false, "uncertain": true]
         var attempted = false
+        var resetRequested = false
         var phase = "runtime_user"
         var diagnostics: [String: Any] = [:]
         var trace: NativeActionTrace?
@@ -35,12 +36,28 @@ struct BBCMessagesActions {
             let automation = automationStatus == noErr
             if request.method == "status" {
                 NativeMessagesObservation.record()
-                var methods = ax && automation ? ["tapback", "read", "reply", "link", "typing"] : []
+                var methods = ax && automation ? ["ui.reset", "tapback", "read", "reply", "link", "typing"] : []
                 methods.append("media.visual")
                 if LocalModels.ready { methods.append("media.transcribe") }
                 receipt = ["ok": true, "accessibility": ax, "automation": automation,
                            "methods": methods, "adapter": "beeper-bbc-1", "automation_status": automationStatus,
                            "messages_running": NativeMessagesStartup.current() != nil]
+            } else if request.method == "ui.reset" {
+                resetRequested = true
+                phase = "system_permissions"
+                guard ax, automation else { throw ActionFailure.unavailable }
+                let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions", isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                phase = "automation_lock"
+                let lock = open(directory.appendingPathComponent("automation.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+                guard lock >= 0 else { throw ActionFailure.unavailable }
+                defer { close(lock) }
+                guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { throw ActionFailure.busy }
+                defer { flock(lock, LOCK_UN) }
+                let api = try initialize(directory)
+                phase = "ui_reset"; attempted = true
+                try await api.bbcResetUI()
+                receipt = ["ok": true, "ui_state": "clean", "drafts": "preserved"]
             } else if request.method == "media.transcribe" {
                 phase = "audio_target"
                 let p = try request.validated()
@@ -188,6 +205,17 @@ struct BBCMessagesActions {
                 }
             }
         } catch {
+            var error = error
+            if let cleanup = error as? BBCNativeUICleanupFailure {
+                diagnostics["ui_state"] = "blocked"
+                diagnostics["cleanup_failure"] = (cleanup.reset as? BBCNativeResetFailure)?.rawValue ?? "unconfirmed"
+                if let original = cleanup.original { error = original }
+                else { phase = "ui_cleanup"; attempted = true }
+            }
+            if let reset = error as? BBCNativeResetFailure {
+                phase = "ui_reset_" + reset.rawValue
+                attempted = resetRequested
+            }
             if phase.hasPrefix("typing_") {
                 NativeMessagesObservation.record()
                 let failure = NativeIndicatorFailure.resolve(error, phase: phase, attempted: attempted)
