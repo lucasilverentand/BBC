@@ -25,7 +25,7 @@ Replies, Tapbacks, read and typing currently target direct chats. Group manageme
 
 BBC runs alongside Messages in your signed-in macOS session. One Swift app hosts the HTTP API, manages keys and connects to its own embedded native messaging bridge. Create a key, start the API and connect your bot or service to the Mac.
 
-Advanced messaging needs a host configured for [native bridge access](docs/native-bridge.md), including SIP and library-validation settings. BBC reports the requirements and starts the bridge explicitly. It never automates the mouse, keyboard or Messages composer.
+Advanced messaging needs the host configuration in [BBC's setup guide](docs/setup.md#native-messaging), including SIP and library-validation settings. BBC reports the requirements and starts its embedded bridge explicitly. It never automates the mouse, keyboard or Messages composer.
 
 ## Get started
 
@@ -37,7 +37,7 @@ cd BBC
 ./script/build_and_run.sh
 ```
 
-Sign into Messages, follow the permission checklist, create an API key and select **Start API**. Enable the native bridge after completing its host setup.
+Follow the [setup guide](docs/setup.md) for permissions, modes and API access. For this sending example, choose Full API mode and a full-access key, then select **Start API**.
 
 ```sh
 curl http://127.0.0.1:7861/v1/messages \
@@ -49,7 +49,7 @@ curl http://127.0.0.1:7861/v1/messages \
 
 Use a new UUID for each operation; reuse it when retrying the same request.
 
-[API guide](docs/api.md) · [Protocol](docs/protocol.md) · [Swift SDK](Sources/BBCClient)
+[Setup guide](docs/setup.md) · [API guide](docs/api.md) · [Protocol](docs/protocol.md) · [Swift SDK](Sources/BBCClient)
 
 [MIT license](LICENSE) · [Third-party notices](NOTICE)
 

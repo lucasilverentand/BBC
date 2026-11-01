@@ -10,13 +10,15 @@ This is a public product repository. Keep personal sending accounts, recipient i
 
 ## Existing contracts
 
+- [BBC setup and rollback](setup.md)
+
 - [Sidebar and API access controls](api-access.md)
 
 - [Multiple users and operating modes](operating-modes.md)
 
 - [api.md](api.md)
 - [protocol.md](protocol.md)
-- [Native bridge architecture and host setup](native-bridge.md)
+- [Native bridge architecture](native-bridge.md)
 - [Groups, message changes, multipart sending and availability](native-features.md)
 - [Webhooks and search](events-and-search.md)
 - [Scheduled sends](scheduling.md)

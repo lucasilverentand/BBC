@@ -8,9 +8,9 @@ This repository is public. Exclude personal account identities, private messagin
 
 ## Native messaging
 
-- Keep BBC one local Mac app with its Swift API and app-managed keys. A separately installed BlueBubbles Server is not part of the product.
+- Keep BBC one local Mac app with its Swift API, embedded native bridge and app-managed keys. No separate messaging server is required.
 - Runtime messaging must not click, navigate a picker, type into a composer or take over the mouse/keyboard. Use a native bridge; unavailable capabilities must fail without a UI fallback.
-- Write BBC's own implementation. BlueBubbles is an architectural/API reference, not code or a binary to copy into BBC.
+- Maintain BBC's own implementation and self-contained operator setup guide. External research references belong in development provenance, not runtime dependencies or setup prerequisites.
 - Preserve exact chat/message/attachment identities and durable operation receipts. Never retry an uncertain native mutation automatically.
 - Changes to SIP, library validation, signing policy or other host protections require explicit authorization. Status and builds must not change them.
 - Preserve the accepted Icon Composer source and stable app signing identity.
