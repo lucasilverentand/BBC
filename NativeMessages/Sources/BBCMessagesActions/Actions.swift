@@ -39,8 +39,11 @@ enum BBCMessagesActions {
             } else {
                 phase = "request_validation"
                 let parameters = try request.validated(), guid = parameters.message_guid!
+                phase = "database_open"
                 let database = try MessagesDatabase(url:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/chat.db"))
+                phase = "message_identity"
                 try database.verify(chat:parameters.chat_guid,message:guid)
+                phase = "native_preparation"
                 if request.method == "read.status" {
                     let unread = try database.unread(chat:parameters.chat_guid)
                     receipt = ["ok":true,"observation_only":true,"chat_guid":parameters.chat_guid,"message_guid":guid,"target_read":!unread.contains(guid),"native_unread_count":unread.count]

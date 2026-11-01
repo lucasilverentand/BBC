@@ -4,6 +4,8 @@ BBC remains one local Mac app with its Swift HTTP API and keys. Runtime messagin
 
 The library, broker and messaging adapter are BBC's own implementation. [Research provenance](development/native-api-research.md) is kept separately from operator instructions.
 
+The embedded library targets Messages' Mac Catalyst runtime, with arm64, arm64e and x86_64 slices. The Swift host remains a macOS app. Building the library for ordinary macOS/arm64 can leave it unloaded even when host requirements pass; CI checks the produced library's platform and CPU slices. A connected, authenticated session is still required before advertising native readiness.
+
 The Swift app brokers authenticated loopback IPC to BBC's own embedded library in the signed-in user's Messages process. Separate random credentials authenticate the embedded library and request workers. Worker credentials stay in a private local descriptor; the library credential is supplied only to its launch. Commands are bounded, correlated by UUID and dispatched once. A lost response remains uncertain.
 
 The library resolves exact native chats and messages and verifies selector signatures before invocation. Native acknowledgements are separate from exact database confirmation. Custom emoji retain their full Unicode sequence. Replies use native thread identities. Read and typing operations call native methods without opening a conversation or creating a draft. Existing background text/media sends and exact attachment reads remain available independently.
