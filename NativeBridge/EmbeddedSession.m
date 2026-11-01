@@ -140,6 +140,11 @@ __attribute__((constructor)) static void StartBBCBridge(void) {
         NSString *token = [NSString stringWithUTF8String:rawToken];
         int port = atoi(rawPort);
         unsetenv("BBC_BRIDGE_SECRET"); unsetenv("BBC_BRIDGE_PORT");
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{ Connect(token,port); });
+        // Messages' early startup can close file descriptors opened by a dyld
+        // constructor. Wait for its main queue before creating the IPC socket,
+        // then keep all blocking network work on the background queue.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{ Connect(token,port); });
+        });
     }
 }
