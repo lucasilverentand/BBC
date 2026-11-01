@@ -25,3 +25,5 @@ Select **Start native bridge** in BBC. It asks Messages to quit gracefully, then
 ## Verification boundary
 
 Builds, synthetic native fixtures and fake-peer IPC tests do not establish live compatibility with Apple's private APIs. Live validation requires a configured host. Verify BBC's exact native message identities, local state and saved receipts; do not treat a callback or elapsed timer as confirmation. For the first custom-emoji check, use one fixed emoji for add/remove and reconcile each operation before another mutation.
+
+[SIP-enabled Tapback research](development/sip-enabled-tapbacks.md) records the standalone-client experiment and public API checks. No SIP-on custom-emoji sending path is verified. A standalone daemon entitlement rejection is separate from the injected bridge's host checks; removing those checks would not establish access.
