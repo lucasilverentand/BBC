@@ -8,6 +8,8 @@ Keep BBC’s README short and feature-led: advertise its supported capabilities,
 
 ## Native architecture and expanded API
 
+The Mac app uses a native sidebar with separate server, keys, permissions, native messaging and startup pages. Operators control which client IP addresses/network ranges may connect and assign each key read-only or full access. The account mode remains the upper limit. Check direct peer addresses rather than trusting forwarded HTTP headers. See [API access controls](../api-access.md).
+
 BBC supports separate full-API and read-only/watch modes per macOS login. The observer account can read/search history, download attachments and manage incoming/update webhooks; it cannot send, react, mark read, type, schedule or start the native bridge. Each account owns its own settings, keys and private stores and must use a distinct listening port. Mode selection stays in the Mac app. macOS SIP and library validation remain machine-wide settings, not per-user isolation. See [operating modes](../operating-modes.md).
 
 On 2026-10-31, Luca replaced the picker-automation approach with a requirement for zero mouse clicks and no keyboard/composer automation. Keep BBC one Mac app with its own native bridge. BlueBubbles is an architectural and private-API reference; write BBC's implementation rather than copying its source or distributing its helper. The earlier picker decisions below are historical and do not authorize restoring a UI fallback. [Native bridge architecture](../native-bridge.md) defines host requirements and confirmation boundaries. BBC reports SIP and library-validation settings but never changes host protections during setup, builds or requests.

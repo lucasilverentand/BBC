@@ -106,16 +106,25 @@ import CoreServices
             if status != noErr { error = "Messages Automation permission was not granted." }
         } catch { self.error = "Open Messages in this macOS account before allowing Automation." }
     }
-    func createKey(name: String) -> String? {
-        do { guard let store else { throw ActionFailure.unavailable }; let secret = try store.create(name: name); keys = store.keys; return secret }
+    func createKey(name: String, access: APIKeyAccess = .readOnly) -> String? {
+        do { guard let store else { throw ActionFailure.unavailable }; let secret = try store.create(name: name,access:access); keys = store.keys; return secret }
         catch { self.error = "Could not create an API key."; return nil }
     }
     func revoke(_ id: UUID) {
         do { guard let store else { throw ActionFailure.unavailable }; try store.revoke(id); keys = store.keys; router?.keysChanged() }
         catch { self.error = "Could not revoke the API key." }
     }
+    func updateKey(_ id: UUID, access: APIKeyAccess) -> Bool {
+        do {
+            guard let store else { throw ActionFailure.unavailable }
+            try store.updateAccess(id,access:access); keys = store.keys; router?.keysChanged(); return true
+        } catch { self.error = "Could not update the API key."; return false }
+    }
     func start(port: Int, allowNetwork: Bool) {
         guard server == nil else { return }
+        guard let networks = try? IPNetwork.parseList(UserDefaults.standard.string(forKey:"allowedClientNetworks") ?? "") else {
+            error = "Enter valid IPv4/IPv6 addresses or CIDR ranges in Allowed clients."; return
+        }
         do {
             guard let store, !store.keys.isEmpty, let port = UInt16(exactly: port), port > 0 else { error = "Create an API key and choose a port from 1 to 65535."; return }
             let fd = open(store.directory.appendingPathComponent("listener.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
@@ -133,13 +142,13 @@ import CoreServices
             if mode == .full, let cached = scheduleService { schedules = cached }
             else if mode == .full {
                 schedules = try LocalScheduleService(directory:store.directory.appendingPathComponent("schedules",isDirectory:true),
-                    isKeyActive:{ id in store.keys.contains { $0.id == id } },execute:{ try await client.request($0) },
+                    isKeyActive:{ id in store.allows(id,method:"send") },execute:{ try await client.request($0) },
                     mediaExpiresAt:{ id in try MediaStore(directory:store.directory.appendingPathComponent("media")).resolve(id).0.created.addingTimeInterval(MediaStore.lifetime) })
                 scheduleService = schedules
             }
             let router = APIRouter(keys:store,webhooks:webhooks,schedules:schedules,mode:mode) { try await client.request($0) }
             self.router = router
-            let listener = try LocalAPIServer(host: allowNetwork ? "0.0.0.0" : "127.0.0.1", port: port, router: router)
+            let listener = try LocalAPIServer(host: allowNetwork ? "0.0.0.0" : "127.0.0.1", port: port, router: router,allowedNetworks:networks)
             server = listener; starting = true; error = nil
             let generation = UUID(); listenerID = generation
             listener.start { [weak self] ready in Task { @MainActor in

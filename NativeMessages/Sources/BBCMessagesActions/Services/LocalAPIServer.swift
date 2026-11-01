@@ -7,9 +7,10 @@ final class LocalAPIServer: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "club.bluebubble.http")
     private let router: APIRouter
+    private let allowedNetworks: [IPNetwork]
     private var connections: [UUID: NWConnection] = [:] // queue-confined
-    init(host: String, port: UInt16, router: APIRouter) throws {
-        self.router = router
+    init(host: String, port: UInt16, router: APIRouter, allowedNetworks: [IPNetwork] = []) throws {
+        self.router = router; self.allowedNetworks = allowedNetworks
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!)
         listener = try NWListener(using: parameters)
@@ -30,6 +31,9 @@ final class LocalAPIServer: @unchecked Sendable {
             if case .failed = state { connection.cancel() }
         }
         connection.start(queue: queue)
+        guard IPNetwork.permits(connection.endpoint,rules:allowedNetworks) else {
+            reply(connection,status:403,value:.object(["error":.string("client_address_denied")])); return
+        }
         queue.asyncAfter(deadline: .now() + 60) { [weak connection] in connection?.cancel() }
         receive(connection, buffer: RequestBuffer())
     }
