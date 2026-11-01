@@ -68,9 +68,7 @@ enum BBCMessagesActions {
                     fields["method"] = .string(request.method)
                     if request.method == "link" { fields["text"] = .string(parameters.url!) }
                     if request.method == "tapback" {
-                        let column = try database.optionalMessageColumn("balloon_bundle_id")
-                        let balloon = try database.rows("SELECT \(column) FROM message WHERE guid=?1 LIMIT 2",[guid])
-                        fields["associated_message_guid"] = .string((balloon.first?.first?.isEmpty == false ? "bp:" : "p:0/") + guid)
+                        fields["associated_message_guid"] = .string(try database.reactionReference(chat:parameters.chat_guid,message:guid))
                     }
                     phase = "native_dispatch"
                     let packet = BBCJSONValue.object(fields)
@@ -114,6 +112,18 @@ enum BBCMessagesActions {
 }
 
 extension MessagesDatabase {
+    func reactionReference(chat: String, message: String) throws -> String {
+        try verify(chat:chat,message:message)
+        let column = try optionalMessageColumn("balloon_bundle_id")
+        let matches = try rows("""
+            SELECT \(column) FROM message m
+            JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id
+            WHERE m.guid=?1 AND c.guid=?2 LIMIT 2
+            """,[message,chat])
+        guard matches.count == 1 else { throw ActionFailure.invalid }
+        return (matches[0][0].isEmpty ? "p:0/" : "bp:") + message
+    }
+
     func confirmedNativeReaction(chat: String, target: String, sent: String, reaction: String, remove: Bool, after: Int64) throws -> Bool {
         let index = NativeRequest.reactions.firstIndex(of:reaction)
         let type = (remove ? 3000 : 2000) + (index ?? 6)

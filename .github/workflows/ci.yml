@@ -24,7 +24,9 @@ jobs:
       - run: bash script/prepare_bridge.sh
       - name: Verify Messages bridge ABI
         run: |
-          xcrun lipo -verify_arch arm64 arm64e x86_64 build/NativeBridge/BBCMessagesBridge.dylib
+          for arch in arm64 arm64e x86_64; do
+            xcrun lipo -verify_arch "$arch" build/NativeBridge/BBCMessagesBridge.dylib
+          done
           test "$(xcrun vtool -show-build build/NativeBridge/BBCMessagesBridge.dylib | awk '$1 == "platform" {print $2}' | sort -u)" = MACCATALYST
       - run: python3 script/test_swift.py NativeBridge
       - run: bash script/prepare_native.sh

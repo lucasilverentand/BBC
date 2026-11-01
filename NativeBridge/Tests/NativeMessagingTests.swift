@@ -12,6 +12,8 @@ private let chatID = "any;-;fixture@example.test"
     var typing = false
     var reads = 0
     var targetAvailable = true
+    var loadable = false
+    var loads = 0
     var last: FixtureMessage?
     @objc var guid: String { chatID }
     @objc(messageForGUID:) func message(_ guid: String) -> FixtureMessage? {
@@ -19,6 +21,14 @@ private let chatID = "any;-;fixture@example.test"
         let value = FixtureMessage(); value.identity = targetID; return value
     }
     @objc(sendMessage:) func send(_ value: FixtureMessage) { sends += 1; last = value }
+    @objc(loadMessagesBeforeAndAfterGUID:numberOfMessagesToLoadBeforeGUID:numberOfMessagesToLoadAfterGUID:loadImmediately:threadIdentifier:)
+    func load(_ guid: String, before: UInt64, after: UInt64, immediately: Bool, thread: String?) -> Any? {
+        loads += 1
+        if loadable && guid == targetID && before > 0 && after > 0 {
+            DispatchQueue.main.asyncAfter(deadline:.now()+0.05) { FixtureChat.shared.targetAvailable = true }
+        }
+        return nil
+    }
     @objc(sendMessage:onService:) func send(_ value: FixtureMessage, on service: FixtureService) { sends += 1; last = value }
     @objc(setLocalUserIsTyping:) func setTyping(_ value: Bool) { typing = value }
     @objc var localUserIsTyping: Bool { typing }
@@ -100,7 +110,9 @@ final class NativeMessagingTests: XCTestCase {
         request.merge(fields) { _,new in new }
         // The exact target's guid must differ from the newly created message.
         var result: [String:Any] = [:]
-        BBCNativePerform(request,resolver) { result = $0 }
+        let completed = expectation(description:"native result")
+        BBCNativePerform(request,resolver) { result = $0; completed.fulfill() }
+        wait(for:[completed],timeout:6)
         return result
     }
     func testUnknownChatAndMessageCannotDispatch() {
@@ -111,6 +123,16 @@ final class NativeMessagingTests: XCTestCase {
     func testExpiredTypingCannotStartAnIndicator() {
         XCTAssertEqual(perform("typing.start",fields:["deadline":0])["ok"] as? Bool,false)
         XCTAssertFalse(FixtureChat.shared.typing)
+    }
+    func testEvictedMessageLoadsOnceBeforeOneExactEmojiDispatch() {
+        FixtureChat.shared.targetAvailable = false
+        FixtureChat.shared.loadable = true
+        let result = perform("tapback",fields:["reaction":"🦥","associated_message_guid":"p:0/"+targetID])
+        XCTAssertEqual(result["ok"] as? Bool,true)
+        XCTAssertEqual(FixtureChat.shared.loads,1)
+        XCTAssertEqual(FixtureChat.shared.sends,1)
+        XCTAssertEqual(FixtureChat.shared.last?.emoji,"🦥")
+        XCTAssertEqual(FixtureChat.shared.last?.association,"p:0/"+targetID)
     }
     func testTypingCleanupSurvivesAnchorEviction() {
         FixtureChat.shared.typing = true

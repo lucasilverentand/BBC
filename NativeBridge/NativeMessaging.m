@@ -105,7 +105,7 @@ NSArray<NSString *> *BBCNativeCapabilities(BBCNativeClassResolver resolver) {
     return features;
 }
 
-void BBCNativePerform(NSDictionary *request, BBCNativeClassResolver resolver, BBCNativeCompletion completion) {
+static void PerformWithMessageLoad(NSDictionary *request, BBCNativeClassResolver resolver, BOOL loadRequested, double loadDeadline, BBCNativeCompletion completion) {
     if ([AdvancedMethods() containsObject:request[@"method"] ?: NSNull.null]) { PerformAdvanced(request,resolver,completion); return; }
     __block BOOL attempted = NO;
     @try {
@@ -121,8 +121,21 @@ void BBCNativePerform(NSDictionary *request, BBCNativeClassResolver resolver, BB
         BOOL stoppingTyping = [method isEqual:@"typing.stop"];
         id target = stoppingTyping ? nil : Invoke(chat, @"messageForGUID:", @[targetID]);
         if (!target && !stoppingTyping) {
-            Invoke(chat,@"loadMessagesBeforeAndAfterGUID:numberOfMessagesToLoadBeforeGUID:numberOfMessagesToLoadAfterGUID:loadImmediately:threadIdentifier:",@[targetID,@0,@0,@YES,NSNull.null]);
+            if (!loadRequested) {
+                Invoke(chat,@"loadMessagesBeforeAndAfterGUID:numberOfMessagesToLoadBeforeGUID:numberOfMessagesToLoadAfterGUID:loadImmediately:threadIdentifier:",@[targetID,@1,@1,@YES,NSNull.null]);
+                loadRequested = YES;
+                loadDeadline = NSDate.date.timeIntervalSince1970 + 5;
+            }
             target = Invoke(chat,@"messageForGUID:",@[targetID]);
+            if (!target && NSDate.date.timeIntervalSince1970 < loadDeadline) {
+                // Loading may complete asynchronously on Messages' main queue.
+                // Request it once, then observe the exact target before any
+                // mutation. There is only one continuation and one dispatch.
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
+                    PerformWithMessageLoad(request,resolver,YES,loadDeadline,completion);
+                });
+                return;
+            }
         }
         if (!stoppingTyping && (!target || ![Invoke(target,@"guid",@[]) isEqual:targetID])) { completion(Failure(@"native_message_missing",NO)); return; }
         if ([method isEqual:@"typing.start"] || [method isEqual:@"typing.stop"]) {
@@ -220,6 +233,10 @@ void BBCNativePerform(NSDictionary *request, BBCNativeClassResolver resolver, BB
     } @catch (NSException *exception) {
         completion(Failure([exception.name isEqual:@"BBCUnsupported"] ? @"native_selector_unavailable" : @"native_exception",attempted));
     }
+}
+
+void BBCNativePerform(NSDictionary *request, BBCNativeClassResolver resolver, BBCNativeCompletion completion) {
+    PerformWithMessageLoad(request,resolver,NO,0,completion);
 }
 
 static BOOL Address(id value) {

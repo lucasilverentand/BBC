@@ -10,6 +10,8 @@ The Swift app brokers authenticated loopback IPC to BBC's own embedded library i
 
 The library resolves exact native chats and messages and verifies selector signatures before invocation. Native acknowledgements are separate from exact database confirmation. Custom emoji retain their full Unicode sequence. Replies use native thread identities. Read and typing operations call native methods without opening a conversation or creating a draft. Existing background text/media sends and exact attachment reads remain available independently.
 
+An older message may be absent from Messages' in-memory cache. BBC requests native history loading once with a nonzero window and observes the exact message for up to five seconds before dispatch. It never opens the conversation to populate that cache. Tapback preparation resolves balloon references through the same verified database chat, including when the optional balloon column is present. Database-column expressions are qualified with the query's message alias.
+
 Typing sessions use UUID leases with a deadline of at most 30 seconds. An old stop request cannot clear a newer lease, and the embedded session clears its own leases on disconnect. Native mutations use BBC-created message GUIDs for database confirmation. Late results cannot cause another send.
 
 The pinned Beeper dependency supplies only the attributed-body decoder and its database utilities. BBC does not build or use its Accessibility controller. `NativeBridge` has synthetic Objective-C fixtures; the Swift IPC tests use a fake native peer. Neither suite opens Messages or sends a real message.
