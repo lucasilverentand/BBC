@@ -40,7 +40,7 @@ Status, message pages/status/search, availability, read status, uploads, downloa
 
 ## Native bridge
 
-Start the native bridge in the Mac app after completing [host setup](native-bridge.md). Status reports `native_bridge_ready` and the bridge's observed capabilities. Advanced actions are unavailable while disconnected or when a required native selector is absent. There is no mouse, keyboard, Accessibility or composer fallback. Background text/media sending and read-only database operations remain independent of this bridge.
+Start the native bridge in the Mac app after completing [BBC host setup](setup.md#native-messaging). Status reports `native_bridge_ready` and the bridge's observed capabilities. Advanced actions are unavailable while disconnected or when a required native selector is absent. There is no mouse, keyboard, Accessibility or composer fallback. Background text/media sending and read-only database operations remain independent of this bridge.
 
 ## Sending
 

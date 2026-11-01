@@ -7,6 +7,7 @@ struct PermissionsPage: View {
         Form {
             Section("Messages access") {
                 PermissionChecklistView(model:model)
+                Link("BBC setup guide",destination:AppBrand.setupGuideURL)
                 HStack {
                     Button("Show setup helper") { model.showPermissionHelper() }
                     Button("Recheck") { model.refreshPermissions() }
@@ -28,7 +29,7 @@ struct NativeMessagingPage: View {
                         if model.nativeConnected { model.stopNativeBridge() } else { model.startNativeBridge() }
                     }.disabled(model.nativeStarting || model.mode == .readOnly)
                     Button("Recheck") { model.refreshNativeBridge() }.disabled(model.nativeStarting)
-                    Link("Host setup",destination:URL(string:"https://github.com/lucasilverentand/BBC/blob/main/docs/native-bridge.md")!)
+                    Link("BBC setup guide",destination:AppBrand.nativeSetupURL)
                 }
                 Text("Starting the bridge restarts Messages gracefully. No drafts are cleared.").font(.caption).foregroundStyle(.secondary)
             }
