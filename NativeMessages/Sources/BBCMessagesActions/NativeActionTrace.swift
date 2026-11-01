@@ -11,7 +11,7 @@ struct NativeActionTrace {
     private let began = DispatchTime.now().uptimeNanoseconds
     private static let logger = Logger(subsystem: "club.bluebubble.transport", category: "NativeMessagesTrace")
     static let readStages: Set<String> = ["read_snapshot", "read_open", "read_unhide_requested", "read_unhide_accepted", "read_already_unhidden", "read_submit", "read_submitted", "read_confirmation"]
-    static let stages = readStages.union(NativeIndicatorFailure.phases).union(NativeIndicatorFailure.controllerPhases).union(["received", "receipt", "reply_ui", "reply_confirmation", "typing_cleanup_returned"])
+    static let stages = readStages.union(["received", "receipt", "native_dispatch", "native_confirmation", "typing_start", "typing_wait", "typing_cleanup", "typing_cleanup_returned"])
 
     init?(_ request: NativeRequest) {
         guard let raw = request.trace_id, let id = UUID(uuidString: raw),
@@ -29,8 +29,8 @@ struct NativeActionTrace {
     }
 
     func line(_ stage: String, attempted: Bool, outcome: String? = nil, error: Error? = nil) -> String? {
-        // The native adapter preserves a changed draft/selection. Its successful
-        // stop return is not proof that the owned placeholder was cleared.
+        // Preserve the legacy stage alias without promoting a stop return into
+        // confirmation that the native typing lease was cleared.
         let observedStage = stage == "typing_stopped" ? "typing_cleanup_returned" : stage
         var event: [String: Any] = ["version": 1, "source": "native", "traceID": id.uuidString, "spanID": spanID.uuidString,
             "action": action, "stage": Self.stages.contains(observedStage) ? observedStage : "native_failure", "attempted": attempted,

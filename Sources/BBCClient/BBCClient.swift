@@ -29,20 +29,22 @@ public struct BBCClient: Sendable {
         if payload.object?["method"]?.string == "send", payload.object?["params"]?.object?["reply_to"] != nil {
             var request = payload.object!; request["method"] = .string("reply"); return try await nativeRequest(.object(request))
         }
-        if ["reply", "link", "tapback", "read", "read.status", "media.transcribe", "media.visual"].contains(payload.object?["method"]?.string ?? "") {
+        let nativeMethods = ["reply", "link", "tapback", "read", "read.status", "media.transcribe", "media.visual", "groups.create", "groups.add", "groups.remove", "groups.name", "groups.photo", "groups.leave", "messages.edit", "messages.unsend", "messages.multipart", "availability"]
+        if nativeMethods.contains(payload.object?["method"]?.string ?? "") {
             return try await nativeRequest(payload)
         }
         let result = try await legacyRequest(payload)
         guard payload.object?["method"]?.string == "status", var status = result.object else { return result }
-        // The old injected-helper reaction is never a substitute for this adapter.
+        // Only the authenticated native bridge advertises advanced actions.
         let oldMethods: [BBCJSONValue]
         if case .array(let values) = status["methods"] { oldMethods = values } else { oldMethods = [] }
-        var methods = oldMethods.compactMap(\.string).filter { !["tapback", "read", "media.transcribe", "media.visual", "reply", "link", "typing"].contains($0) }
+        let advertisedNative = nativeMethods + ["typing"]
+        var methods = oldMethods.compactMap(\.string).filter { !advertisedNative.contains($0) }
         if let native = try? await nativeRequest(.object(["method": .string("status")])),
            case .array(let ready) = native.object?["methods"] {
-            methods += ready.compactMap(\.string).filter { ["tapback", "read", "media.transcribe", "media.visual", "reply", "link", "typing"].contains($0) }
-            status["native_accessibility"] = native.object?["accessibility"]
-            status["native_automation"] = native.object?["automation"]
+            methods += ready.compactMap(\.string).filter { advertisedNative.contains($0) }
+            status["native_bridge_ready"] = native.object?["native_ready"]
+            status["native_bridge"] = native.object?["backend"]
         }
         status["methods"] = .array(Array(Set(methods)).sorted().map(BBCJSONValue.string))
         return .object(status)
@@ -53,7 +55,7 @@ public struct BBCClient: Sendable {
         let input = try JSONEncoder().encode(payload)
         return try await Task.detached {
             let output = try BoundedMessagesProcess().run(executable: helper, arguments: ["--native-actions"], input: input,
-                                                         timeoutSeconds: ["media.transcribe", "media.visual"].contains(payload.object?["method"]?.string ?? "") ? 90 : 25, environment: nativeEnvironment)
+                                                         timeoutSeconds: ["media.transcribe", "media.visual"].contains(payload.object?["method"]?.string ?? "") ? 90 : 35, environment: nativeEnvironment)
             return try JSONDecoder().decode(BBCJSONValue.self, from: output)
         }.value
     }
@@ -82,7 +84,7 @@ public struct BBCClient: Sendable {
             guard let result = reply.object?["result"] else { throw BBCError.invalid("Invalid Messages receipt.") }
             return result
         }.value
-        return method == "messages.after" ? try verifiedServices(in: result) : result
+        return ["messages.after","messages.search"].contains(method) ? try verifiedServices(in: result) : result
     }
     /// `any` is a transport-neutral chat identifier. Confirm the actual message
     /// service from the same local database before admitting it as iMessage.

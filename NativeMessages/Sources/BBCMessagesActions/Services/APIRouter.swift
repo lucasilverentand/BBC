@@ -7,7 +7,14 @@ import BBCClient
     private let execute: @MainActor (BBCJSONValue) async throws -> BBCJSONValue
     private var uploading = false
     private var typing: [UUID: Task<Void, Never>] = [:]
-    init(keys: APIKeyStore, execute: @escaping @MainActor (BBCJSONValue) async throws -> BBCJSONValue) { self.keys = keys; self.execute = execute }
+    private let webhooks: WebhookService?
+    private let schedules: LocalScheduleService?
+    private let mode: OperatingMode
+    init(keys: APIKeyStore, webhooks: WebhookService? = nil, schedules: LocalScheduleService? = nil,
+         mode: OperatingMode = .full,
+         execute: @escaping @MainActor (BBCJSONValue) async throws -> BBCJSONValue) {
+        self.keys = keys; self.webhooks = webhooks; self.schedules = schedules; self.mode = mode; self.execute = execute
+    }
     struct Response { let status: Int; let value: BBCJSONValue }
     struct Operation: Codable { let fingerprint: String; var result: BBCJSONValue? }
 
@@ -22,23 +29,62 @@ import BBCClient
                 let record = try JSONDecoder().decode(Operation.self, from: Data(contentsOf: file))
                 return .init(status: 200, value: record.result ?? .object(["ok": .bool(false), "uncertain": .bool(true), "error": .string("reconcile_before_retrying")]))
             }
-            if method == "GET", path == "/v1/status" { return .init(status: 200, value: try await execute(.object(["method": .string("status")]))) }
+            if method == "GET", path == "/v1/status" {
+                let result = try await execute(.object(["method": .string("status")]))
+                guard var fields = result.object else { throw ActionFailure.unavailable }
+                var methods: [BBCJSONValue] = []
+                if case .array(let values) = fields["methods"] { methods = values }
+                if webhooks != nil { methods += ["webhooks.register","webhooks.list","webhooks.remove"].map(BBCJSONValue.string) }
+                if schedules != nil { methods += ["schedule.create","schedule.update","schedule.cancel","schedule.get","schedule.list"].map(BBCJSONValue.string) }
+                fields["methods"] = .array(methods.filter { $0.string.map { mode.allows(method:$0) } == true })
+                fields["operating_mode"] = .string(mode.rawValue)
+                if mode == .readOnly {
+                    fields["native_bridge_ready"] = .bool(false)
+                    fields["native_bridge"] = .object(["ready":.bool(false),"reason":.string("read_only_mode"),"capabilities":.array([])])
+                }
+                return .init(status:200,value:.object(fields))
+            }
             guard method == "POST" else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
             if path == "/v1/media/upload" {
+                guard mode == .full else { return readOnlyDenied }
                 guard !uploading, let filename = headers["x-bbc-filename"] else { throw ActionFailure.invalid }
                 uploading = true; defer { uploading = false }
                 let store = try MediaStore(directory: keys.directory.appendingPathComponent("media"))
                 return .init(status: 201, value: try await store.create(body, filename: filename).packet)
             }
             let request = try JSONDecoder().decode(BBCJSONValue.self, from: body)
-            let endpointMethods = ["/v1/messages": "send", "/v1/messages/after": "messages.after", "/v1/messages/status": "messages.status", "/v1/replies": "reply", "/v1/links": "link", "/v1/media/download": "media.download", "/v1/tapbacks": "tapback", "/v1/read": "read", "/v1/read/status": "read.status", "/v1/typing/start": "typing.start", "/v1/typing/stop": "typing.stop", "/v1/media/visual": "media.visual", "/v1/media/transcribe": "media.transcribe"]
+            let endpointMethods = [
+                "/v1/messages":"send", "/v1/messages/after":"messages.after", "/v1/messages/status":"messages.status",
+                "/v1/messages/search":"messages.search", "/v1/messages/edit":"messages.edit", "/v1/messages/unsend":"messages.unsend",
+                "/v1/messages/multipart":"messages.multipart", "/v1/availability":"availability",
+                "/v1/groups/create":"groups.create", "/v1/groups/add":"groups.add", "/v1/groups/remove":"groups.remove",
+                "/v1/groups/name":"groups.name", "/v1/groups/photo":"groups.photo", "/v1/groups/leave":"groups.leave",
+                "/v1/replies":"reply", "/v1/links":"link", "/v1/media/download":"media.download", "/v1/tapbacks":"tapback",
+                "/v1/read":"read", "/v1/read/status":"read.status", "/v1/typing/start":"typing.start", "/v1/typing/stop":"typing.stop",
+                "/v1/media/visual":"media.visual", "/v1/media/transcribe":"media.transcribe",
+                "/v1/webhooks/register":"webhooks.register", "/v1/webhooks/list":"webhooks.list", "/v1/webhooks/remove":"webhooks.remove",
+                "/v1/schedules/create":"schedule.create", "/v1/schedules/update":"schedule.update", "/v1/schedules/cancel":"schedule.cancel",
+                "/v1/schedules/get":"schedule.get", "/v1/schedules/list":"schedule.list"
+            ]
             guard let operationMethod = endpointMethods[path], var params = request.object else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
-            let observational = ["messages.after", "messages.status", "media.download", "read.status", "media.visual", "media.transcribe"].contains(operationMethod)
+            guard mode.allows(method:operationMethod) else { return readOnlyDenied }
+            let observational = ["messages.after","messages.status","messages.search","availability","media.download","read.status","media.visual","media.transcribe","webhooks.list","schedule.get","schedule.list"].contains(operationMethod)
             if operationMethod == "send" {
                 params["service"] = .string("imessage"); params["allow_sms_fallback"] = .bool(false)
             }
             let payload: BBCJSONValue = .object(["method": .string(operationMethod), "params": .object(params)])
-            if observational { return .init(status: 200, value: try await execute(payload)) }
+            func perform(_ operationID: UUID? = nil) async throws -> BBCJSONValue {
+                if operationMethod.hasPrefix("webhooks.") {
+                    guard let webhooks else { throw ActionFailure.unavailable }
+                    return try await webhooks.handle(method:operationMethod,params:params,keyID:keyID)
+                }
+                if operationMethod.hasPrefix("schedule.") {
+                    guard let schedules else { throw ActionFailure.unavailable }
+                    return try schedules.handle(method:operationMethod,params:params,keyID:keyID,operationID:operationID)
+                }
+                return try await execute(payload)
+            }
+            if observational { return .init(status: 200, value: try await perform()) }
             guard let raw = headers["idempotency-key"], let operationID = UUID(uuidString: raw) else { return .init(status: 400, value: .object(["error": .string("uuid_idempotency_key_required")])) }
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             let fingerprint = APIKeyStore.digest(String(decoding: try encoder.encode(payload), as: UTF8.self))
@@ -75,7 +121,7 @@ import BBCClient
                 }
                 result = .object(["accepted": .bool(true), "typing_id": .string(id.uuidString), "native_confirmation": .string("pending")])
             } else {
-                do { result = try await execute(payload) }
+                do { result = try await perform(operationID) }
                 catch { result = .object(["ok": .bool(false), "uncertain": .bool(true), "error": .string("reconcile_before_retrying")]) }
             }
             // Revocation stops new work; an already dispatched effect retains its receipt.
@@ -83,5 +129,8 @@ import BBCClient
             return .init(status: 200, value: result)
         } catch { return .init(status: 400, value: .object(["error": .string("invalid_or_unavailable_request")])) }
     }
-    func stop() { for task in typing.values { task.cancel() }; typing.removeAll() }
+    func keysChanged() { for task in typing.values { task.cancel() }; typing.removeAll() }
+    private var readOnlyDenied: Response { .init(status:403,value:.object(["ok":.bool(false),"uncertain":.bool(false),"error":.string("readonly_mode")])) }
+    func startServices() { webhooks?.start(); if mode == .full { schedules?.start() } }
+    func stop() { keysChanged(); webhooks?.stop(); schedules?.stop() }
 }

@@ -2,6 +2,8 @@
 
 Start the API in the Mac app. All routes require `Authorization: Bearer <API key>`. Create and revoke keys in the app; the API cannot mint keys. The default base URL is `http://127.0.0.1:7861`.
 
+Each macOS login selects Full API or [read-only/watch mode](operating-modes.md) in the app. Read-only mode permits observation and webhook configuration, rejects messaging mutations with HTTP 403 `readonly_mode`, and never starts the native bridge or scheduled sending. Status includes `operating_mode` and the allowed methods. Use distinct ports and keys for simultaneous logins.
+
 Every mutation requires an `Idempotency-Key` header containing a UUID chosen and saved by the client before dispatch. Retrying the same UUID and body returns the saved receipt. A changed body returns HTTP 409. An interrupted operation remains uncertain and is never automatically dispatched again. Use `GET /v1/operations/<uuid>` with the same API key to retrieve its retained outcome. Do not create a new UUID merely because the original response was lost.
 
 ## Endpoints
@@ -12,6 +14,11 @@ Every mutation requires an `Idempotency-Key` header containing a UUID chosen and
 | `POST /v1/messages` | `to`, either `text` or uploaded `media_id`; always iMessage, SMS fallback disabled |
 | `POST /v1/messages/after` | `since_rowid`, `limit` (1–200), optional exact `chat_guid`; incremental messages and `next_rowid` |
 | `POST /v1/messages/status` | `chat_guid`, `message_guid`; observed local sent/delivered/read flags |
+| `POST /v1/messages/search` | Text, conversation and date filters; [search guide](events-and-search.md) |
+| `POST /v1/messages/edit`, `/v1/messages/unsend` | Exact owned message and part; [native features](native-features.md) |
+| `POST /v1/messages/multipart` | Text, multiple uploaded media IDs and optional native effect |
+| `POST /v1/availability` | `address`; observed iMessage availability |
+| `POST /v1/groups/create`, `/add`, `/remove`, `/name`, `/photo`, `/leave` | Native group management; [native features](native-features.md) |
 | `POST /v1/replies` | `chat_guid`, `message_guid`, `text`, `read_guids` |
 | `POST /v1/links` | `chat_guid`, `message_guid`, `url`, `read_guids` |
 | `POST /v1/media/upload` | Raw bytes, `X-BBC-Filename` header; returns `media_id` |
@@ -24,8 +31,14 @@ Every mutation requires an `Idempotency-Key` header containing a UUID chosen and
 | `POST /v1/media/visual` | `chat_guid`, `message_guid`, `attachment_guid` |
 | `POST /v1/media/transcribe` | Same attachment target; needs staged local models |
 | `GET /v1/operations/<uuid>` | Receipt for that API key and operation UUID |
+| `POST /v1/webhooks/register`, `/list`, `/remove` | Incoming messages and observed updates; [webhook guide](events-and-search.md) |
+| `POST /v1/schedules/create`, `/update`, `/cancel`, `/get`, `/list` | Local scheduled sends; [scheduling guide](scheduling.md) |
 
-Status, message pages/status, read status, uploads, downloads and media preparation do not require an idempotency key. JSON requests accept at most 64 KB; raw uploads accept 32 MiB; responses are bounded at 2 MB. HTTP connections serve one request and close. The listener accepts at most eight simultaneous connections.
+Status, message pages/status/search, availability, read status, uploads, downloads, media preparation, webhook lists and schedule get/list do not require an idempotency key. JSON requests accept at most 64 KB; raw uploads accept 32 MiB; responses are bounded at 2 MB. HTTP connections serve one request and close. The listener accepts at most eight simultaneous connections.
+
+## Native bridge
+
+Start the native bridge in the Mac app after completing [host setup](native-bridge.md). Status reports `native_bridge_ready` and the bridge's observed capabilities. Advanced actions are unavailable while disconnected or when a required native selector is absent. There is no mouse, keyboard, Accessibility or composer fallback. Background text/media sending and read-only database operations remain independent of this bridge.
 
 ## Sending
 
@@ -56,7 +69,7 @@ Request message pages with `attachments: true` to receive opaque attachment GUID
 
 ## Rich links
 
-Send `{"chat_guid":"…","message_guid":"…","url":"https://example.com","read_guids":["…"]}` to `/v1/links` with an operation UUID. The anchor must be a message in the intended direct chat, and `read_guids` must cover its current unread messages. BBC uses the native composer once, preserves existing drafts, and rejects an open reply composer. Messages generates the preview; `preview: "managed-by-messages"` does not guarantee the site supplies a card or the recipient sees one. Plain URL text can also be sent through `/v1/messages`.
+Send `{"chat_guid":"…","message_guid":"…","url":"https://example.com","read_guids":["…"]}` to `/v1/links` with an operation UUID. The anchor must be a message in the intended direct chat, and `read_guids` must cover its current unread messages. BBC creates a native message and requests Messages' link processing before one send. Messages generates the preview; `preview: "managed-by-messages"` does not guarantee the site supplies a card. Plain URL text can also be sent through `/v1/messages`.
 
 Message pages include `links`: the URL and, when present in Apple’s rich-link payload, title, summary, site name and preview image/icon attachment GUIDs. `preview: false` means only a URL was detected in text. Metadata parsing makes no network requests. Download preview images through the attachment endpoint.
 
@@ -64,17 +77,19 @@ Message pages include `links`: the URL and, when present in Apple’s rich-link 
 
 A message page preserves `guid`, `chat_guid`, `reply_to_guid` and `thread_root_guid` separately. Apple's native thread originator identifies the reply root; it does not always expose an immediate parent reply. Top-level messages use their own GUID as `thread_root_guid`. Do not infer a thread from the latest message, matching text or another conversation with the same person.
 
-Reply with the exact message GUID and chat GUID. The native adapter resolves and confirms the thread root and returns it as `thread_root_guid`, together with the new message `guid`. Existing drafts and ambiguous selections reject the action. `read_guids` must cover the conversation's current unread messages before an action can implicitly mark them read. A new unread message that was not consumed causes rejection.
+Reply with the exact message GUID and chat GUID. The native adapter resolves the native thread identity, then confirms the new message against the database's thread root. The result includes `thread_root_guid` and the new message `guid`. An unavailable or ambiguous native part rejects the action. `read_guids` must cover the conversation's current unread messages before an action that may mark them read. A new unread message that was not consumed causes rejection.
 
 ## Tapbacks and read state
 
-Tapbacks accept `love`, `like`, `dislike`, `laugh`, `emphasis`, `question`, or a single emoji such as `🎉` or `👩‍💻`. Set `remove: true` to remove your exact reaction, using the same `/v1/tapbacks` endpoint and a new operation UUID. Reaction targets include Apple’s balloon references; `reacted_to_guid` is the normalized UUID and `reacted_to_native_guid` preserves the original reference. Message pages expose custom emoji as `reaction_emoji` alongside native add/removal types. Picker availability depends on the Mac’s emoji support; confirmation checks the exact emoji, including modifiers. The target is an exact UUID message in a verified direct iMessage chat. Custom emoji already available in the native Tapback bar use their exact button, with the selected state verified after at most one press. Other custom emoji use the character picker and retain database confirmation. Removal checks the exact native picker button even when the database has no matching own-reaction row. It presses only a selected button and confirms its unselected state; `confirmation: "native-ui"` identifies an observed native selection state; it is not recipient-delivery confirmation. Unavailable or unconfirmed UI state returns failure rather than a successful no-op. Setting an already present reaction is a no-op; the helper never repeats a button press to recover missing confirmation.
+Tapbacks accept `love`, `like`, `dislike`, `laugh`, `emphasis`, `question`, or a single emoji such as `🎉` or `👩‍💻`. Set `remove: true` to remove your exact reaction, using the same `/v1/tapbacks` endpoint and a new operation UUID. The bridge sends an explicit native add/removal event, preserving the full emoji sequence, without searching a picker or toggling a button. Confirmation requires the exact new outgoing reaction GUID, target, native type and custom emoji in the local database. An absent database row is never treated as confirmed removal.
 
-Read opens one verified message in its owned Messages process, then observes the local database. Apple may mark the conversation read as a side effect. A local read confirmation is not proof that the sender saw Apple's Read receipt. `messages.status` reports only the database flags the Mac actually observed; unknown remote visibility must stay unknown.
+Reaction targets include Apple's balloon references; `reacted_to_guid` is the normalized UUID and `reacted_to_native_guid` preserves the original reference. Message pages expose custom emoji as `reaction_emoji` alongside native add/removal types. The current endpoint targets the first native message part in an exact verified direct chat; an ambiguous part rejects the action. Reusing an operation UUID returns its receipt without another native event.
+
+Read marks the exact verified chat read through its native method, then confirms local database state. `read_guids` must cover its current unread set. A local read confirmation is not proof that the sender saw Apple's Read receipt. `messages.status` reports only the database flags the Mac actually observed.
 
 ## Typing
 
-Start returns an accepted session UUID promptly. A session lasts at most 30 seconds. Stop requests cancellation and cleanup of that session's own placeholder. Retrieve the start operation's receipt to see the eventual native result. An accepted start is not confirmation that the recipient saw typing, and a stop request is not proof of placeholder cleanup. Native failure receipts retain uncertainty. Starting another session while automation is owned can fail busy.
+Start returns an accepted session UUID promptly. A session lasts at most 30 seconds and sets native typing state without creating a draft. Stop requests cancellation of that session's lease. The embedded bridge also expires owned leases and clears them when its connection closes. Retrieve the start operation's receipt to see the eventual native result and cleanup confirmation. An accepted start is not confirmation of native typing; a stop acknowledgement only confirms cancellation was requested. Native failure receipts retain uncertainty. Concurrent native operations can fail busy.
 
 ## Operation receipts and custody
 

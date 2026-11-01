@@ -8,17 +8,17 @@ struct PermissionHelperView: View {
             HStack {
                 Text("Messages setup").font(.headline)
                 Spacer()
-                Text("\(model.permissions.grantedCount) of 3").font(.caption).foregroundStyle(.secondary)
+                Text("\(model.grantedPermissionCount) of \(model.permissionSteps.count)").font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
                 AppFileDragView(url: Bundle.main.bundleURL).frame(width: 56, height: 56)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Drag this app into Settings").fontWeight(.medium)
-                    Text("Drop it into Full Disk Access or Accessibility, then enable it.").font(.caption).foregroundStyle(.secondary)
+                    Text("Drop it into Full Disk Access, then enable it.").font(.caption).foregroundStyle(.secondary)
                 }
             }.padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
             PermissionChecklistView(model: model, compact: true)
-            if model.permissions.allGranted {
+            if model.grantedPermissionCount == model.permissionSteps.count {
                 Label("Permissions are ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else {
                 Text(model.permissions.messagesRunning ? "Changes are checked automatically. If macOS asks you to quit, reopen BBC after enabling access." : "Open Messages and sign in on this Mac. Permissions are checked automatically while this helper is open.")

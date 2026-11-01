@@ -89,7 +89,7 @@ struct MediaStore {
                   upload.bytes > 0, upload.bytes <= Self.maximumBytes else { throw ActionFailure.invalid }
             if Date().timeIntervalSince(upload.created) > Self.lifetime {
                 let media = directory.appendingPathComponent(upload.filename)
-                if directory.standardizedFileURL == Self.handoffDirectory.standardizedFileURL {
+                if [Self.handoffDirectory,Self.nativeHandoffDirectory].contains(where:{ directory.standardizedFileURL == $0.standardizedFileURL }) {
                     // Never remove an uncertain handoff still used by Messages.
                     let home = FileManager.default.homeDirectoryForCurrentUser
                     let database = try? MessagesDatabase(url: home.appendingPathComponent("Library/Messages/chat.db"))
@@ -105,6 +105,11 @@ struct MediaStore {
     }
     static var handoffDirectory: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("BlueBubbleClubTransfers", isDirectory: true)
+    }
+    /// Messages' sandbox can read files within its own Library/Messages tree.
+    /// This directory contains only BBC-created outgoing handoffs, never chat.db.
+    static var nativeHandoffDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/BBCTransfers",isDirectory:true)
     }
     /// The transfer agent cannot read another app's protected Application Support.
     /// Keep the handoff private, bounded, and outside that protected directory.

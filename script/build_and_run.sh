@@ -12,8 +12,12 @@ fi
 [[ -n "$BBC_SIGNING_IDENTITY" ]] || { echo 'Set BBC_SIGNING_IDENTITY to a valid Apple Development identity.' >&2; exit 1; }
 if [[ "$MODE" != build ]]; then pkill -x "$APP_NAME" >/dev/null 2>&1 || true; fi
 bash "$ROOT/script/prepare_native.sh"
+bash "$ROOT/script/prepare_bridge.sh"
 BIN="$(swift build --package-path "$ROOT/NativeMessages" --show-bin-path)"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+mkdir -p "$BUNDLE/Contents/Frameworks"
+cp "$ROOT/build/NativeBridge/BBCMessagesBridge.dylib" "$BUNDLE/Contents/Frameworks/"
+codesign --force --sign "$BBC_SIGNING_IDENTITY" --options runtime "$BUNDLE/Contents/Frameworks/BBCMessagesBridge.dylib"
 cp "$BIN/$APP_NAME" "$BUNDLE/Contents/MacOS/$APP_NAME"
 for RESOURCE in BBCMessagesActions_BBCMessagesActions FluidAudio_FluidAudio; do
   [[ -d "$BIN/$RESOURCE.bundle" ]] || { echo "Missing $RESOURCE.bundle" >&2; exit 1; }

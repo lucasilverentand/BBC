@@ -5,7 +5,7 @@ struct PermissionChecklistView: View {
     var compact = false
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 12 : 16) {
-            ForEach(PermissionStep.allCases) { step in
+            ForEach(model.permissionSteps) { step in
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: model.permissions.granted(step) ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(model.permissions.granted(step) ? Color.green : Color.secondary)

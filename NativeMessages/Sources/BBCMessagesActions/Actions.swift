@@ -1,236 +1,127 @@
 import Foundation
-import AppKit
-import ApplicationServices
-import CoreServices
+import BBCClient
 import Darwin
-@preconcurrency import IMessage
 
-struct BBCMessagesActions {
+/// Native calls only. This worker has no Accessibility or keyboard/mouse path.
+enum BBCMessagesActions {
     @MainActor static func main() async {
-        var receipt: [String: Any] = ["ok": false, "uncertain": true]
-        var attempted = false
-        var phase = "runtime_user"
-        var diagnostics: [String: Any] = [:]
+        var attempted = false, phase = "request_input"
         var trace: NativeActionTrace?
+        var receipt: [String:Any]
         do {
-            guard getuid() != 0, getuid() == geteuid() else { throw ActionFailure.invalid }
-            phase = "request_input"
+            guard getuid() != 0, geteuid() == getuid() else { throw ActionFailure.invalid }
             if CommandLine.arguments.contains("--typing-session") {
-                try await NativeTypingSession.run(initialize: initialize, decoded: { trace = NativeActionTrace($0) }, progress: {
-                    phase = $0; attempted = $1; trace?.record($0, attempted: $1)
-                })
+                phase = "operating_mode"
+                guard OperatingMode.current == .full else { throw ActionFailure.invalid }
+                try await NativeTypingSession.run(decoded:{ trace = NativeActionTrace($0) },progress:{ phase = $0; attempted = $1; trace?.record($0,attempted:$1) })
                 return
             }
             var input = Data()
-            while let chunk = try FileHandle.standardInput.read(upToCount: 8192), !chunk.isEmpty {
-                guard input.count + chunk.count <= 65536 else { throw ActionFailure.invalid }
-                input.append(chunk)
+            while let data = try FileHandle.standardInput.read(upToCount:8192), !data.isEmpty {
+                guard input.count + data.count <= 65536 else { throw ActionFailure.invalid }; input.append(data)
             }
-            let request = try JSONDecoder().decode(NativeRequest.self, from: input)
-            trace = NativeActionTrace(request); trace?.record("received", attempted: false)
-            phase = "database_access"
-            let database = try MessagesDatabase(url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/chat.db"))
-            let ax = AXIsProcessTrusted()
-            let automationStatus = NativeMessagesStartup.automationStatus()
-            let automation = automationStatus == noErr
+            phase = "operating_mode"
+            let decoded = try JSONDecoder().decode(BBCJSONValue.self,from:input)
+            guard let method = decoded.object?["method"]?.string, OperatingMode.current.allows(method:method) else { throw ActionFailure.invalid }
+            let envelope = try JSONDecoder().decode(BBCJSONValue.self,from:input)
+            if let method = envelope.object?["method"]?.string, AdvancedRequest.methods.contains(method) {
+                let result = await AdvancedActions.perform(envelope)
+                FileHandle.standardOutput.write(try JSONEncoder().encode(result) + Data([10])); return
+            }
+            let request = try JSONDecoder().decode(NativeRequest.self,from:input)
+            trace = NativeActionTrace(request)
             if request.method == "status" {
-                NativeMessagesObservation.record()
-                var methods = ax && automation ? ["tapback", "read", "reply", "link", "typing"] : []
-                methods.append("media.visual")
-                if LocalModels.ready { methods.append("media.transcribe") }
-                receipt = ["ok": true, "accessibility": ax, "automation": automation,
-                           "methods": methods, "adapter": "beeper-bbc-1", "automation_status": automationStatus,
-                           "messages_running": NativeMessagesStartup.current() != nil]
-            } else if request.method == "media.transcribe" {
-                phase = "audio_target"
-                let p = try request.validated()
-                let attachment = try database.audioAttachment(chat: p.chat_guid, message: p.message_guid!, attachment: p.attachment_guid!)
-                let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions", isDirectory: true)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                phase = "audio_lock"
-                let lock = open(directory.appendingPathComponent("media.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-                guard lock >= 0 else { throw ActionFailure.unavailable }
-                defer { close(lock) }
-                guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { throw ActionFailure.busy }
-                defer { flock(lock, LOCK_UN) }
-                phase = "audio_transcription"
-                receipt = try await LocalTranscription.transcribe(attachment)
-                receipt["chat_guid"] = p.chat_guid; receipt["message_guid"] = p.message_guid!
-                receipt["attachment_guid"] = p.attachment_guid!
-            } else if request.method == "media.visual" {
-                phase = "visual_target"
-                let p = try request.validated()
-                let attachment = try database.visualAttachment(chat: p.chat_guid, message: p.message_guid!, attachment: p.attachment_guid!)
-                let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions", isDirectory: true)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                phase = "visual_lock"
-                let lock = open(directory.appendingPathComponent("media.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-                guard lock >= 0 else { throw ActionFailure.unavailable }
-                defer { close(lock) }
-                guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { throw ActionFailure.busy }
-                defer { flock(lock, LOCK_UN) }
-                phase = "visual_preparation"
-                receipt = try await LocalVisualMedia.prepare(attachment).packet
-                receipt["chat_guid"] = p.chat_guid; receipt["message_guid"] = p.message_guid!
-                receipt["attachment_guid"] = p.attachment_guid!
+                let backend: BBCJSONValue = OperatingMode.current == .readOnly ? .object(["ready":.bool(false),"reason":.string("read_only_mode"),"capabilities":.array([])]) : await Task.detached { NativeBridgeClient.status() }.value
+                let ready = backend.object?["ready"]?.bool == true
+                let methods = backend.object?["capabilities"] ?? .array([])
+                receipt = ["ok":true,"adapter":"bbc-native-1","native_ready":ready,"backend":try JSONSerialization.jsonObject(with:JSONEncoder().encode(backend)),"methods":try JSONSerialization.jsonObject(with:JSONEncoder().encode(methods))]
+                receipt["methods"] = (receipt["methods"] as? [String] ?? []) + ["read.status"] + (LocalModels.ready ? ["media.transcribe","media.visual"] : ["media.visual"])
             } else {
-                phase = "system_permissions"
-                guard request.method == "read.status" || ax else { throw ActionFailure.unavailable }
                 phase = "request_validation"
-                let p = try request.validated(), guid = p.message_guid!
-                phase = "automation_lock"
-                let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions", isDirectory: true)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                let lock = open(directory.appendingPathComponent("automation.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-                guard lock >= 0 else { throw ActionFailure.unavailable }
-                defer { close(lock) }
-                guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { throw ActionFailure.busy }
-                defer { flock(lock, LOCK_UN) }
-                phase = "target_identity"
-                try database.verify(chat: p.chat_guid, message: guid)
+                let parameters = try request.validated(), guid = parameters.message_guid!
+                let database = try MessagesDatabase(url:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/chat.db"))
+                try database.verify(chat:parameters.chat_guid,message:guid)
                 if request.method == "read.status" {
-                    // Observation only: no bootstrap, activation, Apple Events or UI action.
-                    let unread = try database.unread(chat: p.chat_guid)
-                    receipt = ["ok": true, "observation_only": true, "chat_guid": p.chat_guid,
-                               "message_guid": guid, "target_read": !unread.contains(guid), "native_unread_count": unread.count]
-                } else if ["reply", "link"].contains(request.method) {
-                    let unread = try database.unread(chat: p.chat_guid)
-                    guard Set(unread).isSubset(of: Set(p.read_guids!)) else { throw ActionFailure.invalid }
-                    let root = try database.threadRoot(chat: p.chat_guid, message: guid)
-                    let before = try database.maximumRowID()
-                    phase = "messages_startup"
-                    let pid = try await NativeMessagesStartup.ensureRunning()
-                    phase = "system_permissions"
-                    guard NativeMessagesStartup.automationStatus(pid: pid) == noErr else { throw ActionFailure.unavailable }
-                    phase = "adapter_setup"
-                    let api = try initialize(directory)
-                    guard Set(try database.unread(chat: p.chat_guid)).isSubset(of: Set(p.read_guids!)) else { throw ActionFailure.invalid }
-                    attempted = true; phase = request.method == "link" ? "link_ui" : "reply_ui"
-                    trace?.record(phase, attempted: attempted)
-                    let text = request.method == "link" ? p.url! : p.text!
-                    if request.method == "link" { try await api.bbcSendLinkOnce(threadID: p.chat_guid, messageID: guid, url: text) }
-                    else { try await api.bbcReplyOnce(threadID: p.chat_guid, messageID: guid, text: text) }
-                    phase = request.method == "link" ? "link_confirmation" : "reply_confirmation"
-                    trace?.record(phase, attempted: attempted)
-                    var sent: String?
-                    try await confirm { sent = request.method == "link"
-                            ? try database.confirmedLink(chat: p.chat_guid, text: text, after: before)
-                            : try database.confirmedReply(chat: p.chat_guid, root: root, text: text, after: before)
-                        return sent != nil }
-                    receipt = ["ok": true, "guid": sent!, "chat_guid": p.chat_guid, "confirmation": "local-database"]
-                    if request.method == "reply" { receipt["reply_to_guid"] = guid; receipt["thread_root_guid"] = root }
-                    else { receipt["url"] = text; receipt["preview"] = "managed-by-messages" }
-                } else if request.method == "tapback" {
-                    phase = "reaction_snapshot"
-                    let reaction = p.reaction!
-                    let nativeReaction = NativeRequest.reactions.firstIndex(of: reaction).map { NativeRequest.beeperReactions[$0] } ?? reaction
-                    let remove = p.remove ?? false
-                    if !remove, EmojiTapback.isDesired(current: try database.reactionValue(chat: p.chat_guid, message: guid), reaction: reaction, remove: false) {
-                        receipt = ["ok": true, "unchanged": true, "message_guid": guid, "chat_guid": p.chat_guid]
+                    let unread = try database.unread(chat:parameters.chat_guid)
+                    receipt = ["ok":true,"observation_only":true,"chat_guid":parameters.chat_guid,"message_guid":guid,"target_read":!unread.contains(guid),"native_unread_count":unread.count]
+                } else if ["media.visual","media.transcribe"].contains(request.method) {
+                    let lock = try NativeOperationLock(name:"media.lock"); defer { lock.release() }
+                    if request.method == "media.visual" {
+                        phase = "visual_preparation"
+                        let attachment = try database.visualAttachment(chat:parameters.chat_guid,message:guid,attachment:parameters.attachment_guid!)
+                        receipt = try await LocalVisualMedia.prepare(attachment).packet
                     } else {
-                        phase = "messages_startup"
-                        let pid = try await NativeMessagesStartup.ensureRunning()
-                        phase = "system_permissions"
-                        guard NativeMessagesStartup.automationStatus(pid: pid) == noErr else { throw ActionFailure.unavailable }
-                        phase = "adapter_setup"
-                        let api = try initialize(directory)
-                        attempted = true
-                        phase = "reaction_ui"
-                        let nativeStateObserved = try await api.bbcSetReactionOnce(threadID: p.chat_guid, messageID: guid, reaction: nativeReaction, on: !remove)
-                        phase = "reaction_confirmation"
-                        if !nativeStateObserved {
-                            guard !remove else { throw ActionFailure.uncertain }
-                            try await confirm {
-                                EmojiTapback.isDesired(current: try database.reactionValue(chat: p.chat_guid, message: guid), reaction: reaction, remove: remove)
-                            }
-                        }
-                        receipt = ["ok": true, "message_guid": guid, "chat_guid": p.chat_guid, "reaction": p.reaction!, "remove": remove,
-                                   "confirmation": nativeStateObserved ? "native-ui" : "local-database"]
+                        phase = "audio_transcription"
+                        receipt = try await LocalTranscription.transcribe(database.audioAttachment(chat:parameters.chat_guid,message:guid,attachment:parameters.attachment_guid!))
                     }
+                    receipt["chat_guid"] = parameters.chat_guid; receipt["message_guid"] = guid; receipt["attachment_guid"] = parameters.attachment_guid!
                 } else {
-                    phase = "read_snapshot"
-                    let unread = try database.unread(chat: p.chat_guid)
-                    phase = "unconsumed_native_messages"
-                    diagnostics = ["native_unread_count": unread.count, "outside_scope_count": Set(unread).subtracting(p.read_guids!).count]
-                    if !Set(unread).isSubset(of: Set(p.read_guids!)) {
-                        diagnostics["outside_scope_metadata"] = try database.unreadOutsideScope(chat: p.chat_guid, consumed: Set(p.read_guids!))
+                    let lock = try NativeOperationLock(name:"automation.lock"); defer { lock.release() }
+                    if ["read","reply","link"].contains(request.method) {
+                        guard Set(try database.unread(chat:parameters.chat_guid)).isSubset(of:Set(parameters.read_guids!)) else { throw ActionFailure.invalid }
                     }
-                    guard Set(unread).isSubset(of: Set(p.read_guids!)) else { throw ActionFailure.invalid }
-                    if !unread.isEmpty {
-                        phase = "messages_startup"
-                        let pid = try await NativeMessagesStartup.ensureRunning()
-                        phase = "system_permissions"
-                        guard NativeMessagesStartup.automationStatus(pid: pid) == noErr else { throw ActionFailure.unavailable }
-                        phase = "read_target"
-                        let target = try NativeMessageRead.prepare(messageGUID: guid, pid: pid)
-                        try await NativeMessageRead.perform(target, recheck: {
-                            // Startup can suspend. Recheck exact identity and the
-                            // complete unread set immediately before the one open.
-                            try database.verify(chat: p.chat_guid, message: guid)
-                            let current = try database.unread(chat: p.chat_guid)
-                            phase = "unconsumed_native_messages"
-                            diagnostics = ["native_unread_count": current.count, "outside_scope_count": Set(current).subtracting(p.read_guids!).count]
-                            if !Set(current).isSubset(of: Set(p.read_guids!)) {
-                                diagnostics["outside_scope_metadata"] = try database.unreadOutsideScope(chat: p.chat_guid, consumed: Set(p.read_guids!))
-                            }
-                            guard Set(current).isSubset(of: Set(p.read_guids!)) else { throw ActionFailure.invalid }
-                            return !current.isEmpty
-                        }, progress: { phase = $0; attempted = $1; trace?.record($0, attempted: $1) }, submit: { target in
-                            try NativeMessageRead.submit(target, observation: { trace?.record($0, attempted: true) })
-                        }) {
-                            try await confirm {
-                                try database.verify(chat: p.chat_guid, message: guid)
-                                return try database.unread(chat: p.chat_guid).isEmpty
+                    let before = try database.maximumRowID()
+                    var fields = try JSONDecoder().decode(BBCJSONValue.self,from:input).object?["params"]?.object ?? [:]
+                    fields["method"] = .string(request.method)
+                    if request.method == "link" { fields["text"] = .string(parameters.url!) }
+                    if request.method == "tapback" {
+                        let column = try database.optionalMessageColumn("balloon_bundle_id")
+                        let balloon = try database.rows("SELECT \(column) FROM message WHERE guid=?1 LIMIT 2",[guid])
+                        fields["associated_message_guid"] = .string((balloon.first?.first?.isEmpty == false ? "bp:" : "p:0/") + guid)
+                    }
+                    phase = "native_dispatch"
+                    let packet = BBCJSONValue.object(fields)
+                    let native = try await Task.detached { try NativeBridgeClient.request(packet) }.value
+                    if native.object?["ok"]?.bool != true {
+                        receipt = try JSONSerialization.jsonObject(with:JSONEncoder().encode(native)) as? [String:Any] ?? ["ok":false,"uncertain":true]
+                    } else {
+                        attempted = true; phase = "native_confirmation"
+                        if request.method == "read" {
+                            try await confirm { try database.unread(chat:parameters.chat_guid).isEmpty }
+                            receipt = ["ok":true,"chat_guid":parameters.chat_guid,"confirmation":"local-chat-read","sender_receipt":"unconfirmed"]
+                        } else {
+                            guard let sent = native.object?["guid"]?.string, UUID(uuidString:sent) != nil else { throw ActionFailure.uncertain }
+                            if request.method == "tapback" {
+                                try await confirm { try database.confirmedNativeReaction(chat:parameters.chat_guid,target:guid,sent:sent,reaction:parameters.reaction!,remove:parameters.remove ?? false,after:before) }
+                                receipt = ["ok":true,"guid":sent,"chat_guid":parameters.chat_guid,"message_guid":guid,"reaction":parameters.reaction!,"remove":parameters.remove ?? false,"confirmation":"local-database"]
+                            } else if request.method == "reply" {
+                                let root = try database.threadRoot(chat:parameters.chat_guid,message:guid)
+                                try await confirm { try database.confirmedReply(chat:parameters.chat_guid,root:root,text:parameters.text!,after:before) == sent }
+                                receipt = ["ok":true,"guid":sent,"chat_guid":parameters.chat_guid,"reply_to_guid":guid,"thread_root_guid":root,"confirmation":"local-database"]
+                            } else {
+                                try await confirm { try database.confirmedLink(chat:parameters.chat_guid,text:parameters.url!,after:before) == sent }
+                                receipt = ["ok":true,"guid":sent,"chat_guid":parameters.chat_guid,"url":parameters.url!,"preview":"managed-by-messages","confirmation":"local-database"]
                             }
                         }
                     }
-                    receipt = ["ok": true, "chat_guid": p.chat_guid, "confirmation": "local-chat-read", "sender_receipt": "unconfirmed"]
                 }
             }
         } catch {
-            if phase.hasPrefix("typing_") {
-                NativeMessagesObservation.record()
-                let failure = NativeIndicatorFailure.resolve(error, phase: phase, attempted: attempted)
-                phase = failure.phase; attempted = failure.attempted
-            }
-            if let reaction = error as? BBCNativeReactionFailure {
-                phase = "reaction_" + reaction.rawValue
-                attempted = [.directAction, .apply].contains(reaction)
-            }
-            if phase.hasPrefix("reaction_") { NativeMessagesObservation.record() }
-            if let controller = error as? BBCNativeControllerFailure {
-                phase = "controller_" + controller.rawValue; attempted = false
-            }
-            if let reply = error as? BBCNativeReplyFailure {
-                phase = "reply_" + reply.rawValue
-                attempted = reply == .send
-            }
-            let readFailure = NativeReadFailureDisposition.resolve(error, phase: phase, attempted: attempted)
-            phase = readFailure.phase; attempted = readFailure.attempted
-            trace?.record(phase, attempted: attempted, outcome: attempted ? "uncertain" : "failed", error: error)
-            // No localized errors, paths, handles, message text or credentials.
-            receipt = diagnostics.merging(["ok": false, "uncertain": attempted, "failure_code": phase,
-                                          "error": "Native Messages action not confirmed; reconcile before retrying."], uniquingKeysWith: { _, new in new })
-            if phase.hasPrefix("typing_") {
-                NativeIndicatorFailure.record(phase: phase, attempted: attempted)
-            }
+            if let failure = error as? ActionFailure, failure == .uncertain { attempted = true }
+            receipt = ["ok":false,"uncertain":attempted,"failure_code":phase,"error":"Native action unavailable or unconfirmed; reconcile a dispatched operation before retrying."]
+            trace?.record(phase,attempted:attempted,outcome:attempted ? "uncertain" : "failed")
         }
-        trace?.record("receipt", attempted: attempted, outcome: receipt["observation_only"] as? Bool == true ? "observation-only" : receipt["ok"] as? Bool == true ? "native-confirmed" : receipt["uncertain"] as? Bool == true ? "uncertain" : "failed")
-        if let data = try? JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]) {
-            FileHandle.standardOutput.write(data + Data([10]))
-        }
+        if let data = try? JSONSerialization.data(withJSONObject:receipt,options:.sortedKeys) { FileHandle.standardOutput.write(data + Data([10])) }
     }
-    @MainActor private static func initialize(_ directory: URL) throws -> PlatformAPI {
-        NSApplication.shared.setActivationPolicy(.prohibited)
-        IMessageHost.bootstrapWithOptions(dataDirPath: directory.path, verbose: false, useSecondaryInstance: false)
-        return try PlatformAPI(accountID: "bbc-local")
-    }
-    @MainActor private static func confirm(_ predicate: () throws -> Bool) async throws {
+    @MainActor static func confirm(_ predicate: () throws -> Bool) async throws {
         let deadline = Date().addingTimeInterval(5)
-        repeat {
-            if try predicate() { return }
-            try await Task.sleep(for: .milliseconds(100))
-        } while Date() < deadline
+        repeat { if try predicate() { return }; try await Task.sleep(for:.milliseconds(100)) } while Date() < deadline
         throw ActionFailure.uncertain
+    }
+}
+
+extension MessagesDatabase {
+    func confirmedNativeReaction(chat: String, target: String, sent: String, reaction: String, remove: Bool, after: Int64) throws -> Bool {
+        let index = NativeRequest.reactions.firstIndex(of:reaction)
+        let type = (remove ? 3000 : 2000) + (index ?? 6)
+        let emoji = try optionalMessageColumn("associated_message_emoji")
+        let matches = try rows("""
+            SELECT m.associated_message_guid,\(emoji) FROM message m
+            JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id
+            WHERE m.guid=?1 AND c.guid=?2 AND m.ROWID>CAST(?3 AS INTEGER)
+            AND m.is_from_me=1 AND m.service='iMessage' AND m.associated_message_type=CAST(?4 AS INTEGER)
+            AND m.is_sent=1 AND COALESCE(m.error,0)=0 LIMIT 2
+            """,[sent,chat,String(after),String(type)])
+        return matches.count == 1 && normalizedGUID(matches[0][0]) == target && (index != nil || matches[0][1] == reaction)
     }
 }
