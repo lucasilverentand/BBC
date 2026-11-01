@@ -121,13 +121,15 @@ static void PerformWithMessageLoad(NSDictionary *request, BBCNativeClassResolver
         BOOL stoppingTyping = [method isEqual:@"typing.stop"];
         id target = stoppingTyping ? nil : Invoke(chat, @"messageForGUID:", @[targetID]);
         if (!target && !stoppingTyping) {
+            BOOL waitForTapback = [method isEqual:@"tapback"];
             if (!loadRequested) {
-                Invoke(chat,@"loadMessagesBeforeAndAfterGUID:numberOfMessagesToLoadBeforeGUID:numberOfMessagesToLoadAfterGUID:loadImmediately:threadIdentifier:",@[targetID,@1,@1,@YES,NSNull.null]);
+                NSNumber *window = waitForTapback ? @1 : @0;
+                Invoke(chat,@"loadMessagesBeforeAndAfterGUID:numberOfMessagesToLoadBeforeGUID:numberOfMessagesToLoadAfterGUID:loadImmediately:threadIdentifier:",@[targetID,window,window,@YES,NSNull.null]);
                 loadRequested = YES;
                 loadDeadline = NSDate.date.timeIntervalSince1970 + 5;
             }
             target = Invoke(chat,@"messageForGUID:",@[targetID]);
-            if (!target && NSDate.date.timeIntervalSince1970 < loadDeadline) {
+            if (waitForTapback && !target && NSDate.date.timeIntervalSince1970 < loadDeadline) {
                 // Loading may complete asynchronously on Messages' main queue.
                 // Request it once, then observe the exact target before any
                 // mutation. There is only one continuation and one dispatch.
