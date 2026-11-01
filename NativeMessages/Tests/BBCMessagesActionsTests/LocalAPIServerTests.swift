@@ -4,6 +4,28 @@ import BBCClient
 @testable import BBCMessagesActions
 
 @MainActor final class LocalAPIServerTests: XCTestCase {
+    func testClientNetworkRestrictionIgnoresForwardedHeaders() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let keys = try APIKeyStore(directory:directory), secret = try keys.create(name:"IP fixture")
+        var calls = 0
+        let router = APIRouter(keys:keys) { _ in calls += 1; return .null }
+        let port = UInt16.random(in:20000...45000)
+        let server = try LocalAPIServer(host:"127.0.0.1",port:port,router:router,allowedNetworks:try IPNetwork.parseList("10.0.0.0/8"))
+        defer { server.stop() }
+        let ready = await withCheckedContinuation { continuation in
+            let once = ReadyOnce(continuation); server.start { once.finish($0) }
+        }
+        XCTAssertTrue(ready)
+        var request = URLRequest(url:URL(string:"http://127.0.0.1:\(port)/v1/status")!)
+        request.setValue("Bearer "+secret,forHTTPHeaderField:"Authorization")
+        request.setValue("10.0.0.1",forHTTPHeaderField:"X-Forwarded-For")
+        request.setValue("for=10.0.0.1",forHTTPHeaderField:"Forwarded")
+        let (data,response) = try await URLSession.shared.data(for:request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode,403)
+        XCTAssertEqual(try JSONDecoder().decode(BBCJSONValue.self,from:data).object?["error"]?.string,"client_address_denied")
+        XCTAssertEqual(calls,0)
+    }
     func testEmbeddedListenerAuthenticatesBeforeCallingTransport() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

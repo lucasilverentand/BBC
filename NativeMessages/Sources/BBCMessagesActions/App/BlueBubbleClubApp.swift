@@ -14,8 +14,8 @@ struct BlueBubbleClubApp: App {
     @State private var model = AppModel()
     var body: some Scene {
         WindowGroup("Blue Bubble Club", id: "main") {
-            ContentView(model: model).frame(minWidth: 480, minHeight: 520)
-        }.defaultSize(width: 540, height: 620)
+            ContentView(model: model).frame(minWidth: 760, minHeight: 540)
+        }.defaultSize(width: 920, height: 680)
     }
 }
 final class AppDelegate: NSObject, NSApplicationDelegate {

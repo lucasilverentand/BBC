@@ -10,6 +10,8 @@ This is a public product repository. Keep personal sending accounts, recipient i
 
 ## Existing contracts
 
+- [Sidebar and API access controls](api-access.md)
+
 - [Multiple users and operating modes](operating-modes.md)
 
 - [api.md](api.md)

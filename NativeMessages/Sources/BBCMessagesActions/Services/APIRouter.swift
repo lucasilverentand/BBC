@@ -32,13 +32,15 @@ import BBCClient
             if method == "GET", path == "/v1/status" {
                 let result = try await execute(.object(["method": .string("status")]))
                 guard var fields = result.object else { throw ActionFailure.unavailable }
+                guard let access = keys.keys.first(where:{ $0.id == keyID })?.access else { return .init(status:401,value:.object(["error":.string("unauthorized")])) }
                 var methods: [BBCJSONValue] = []
                 if case .array(let values) = fields["methods"] { methods = values }
                 if webhooks != nil { methods += ["webhooks.register","webhooks.list","webhooks.remove"].map(BBCJSONValue.string) }
                 if schedules != nil { methods += ["schedule.create","schedule.update","schedule.cancel","schedule.get","schedule.list"].map(BBCJSONValue.string) }
-                fields["methods"] = .array(methods.filter { $0.string.map { mode.allows(method:$0) } == true })
+                fields["methods"] = .array(methods.filter { $0.string.map { mode.allows(method:$0) && keys.allows(keyID,method:$0) } == true })
+                fields["key_access"] = .string(access.rawValue)
                 fields["operating_mode"] = .string(mode.rawValue)
-                if mode == .readOnly {
+                if mode == .readOnly || !keys.allows(keyID,method:"send") {
                     fields["native_bridge_ready"] = .bool(false)
                     fields["native_bridge"] = .object(["ready":.bool(false),"reason":.string("read_only_mode"),"capabilities":.array([])])
                 }
@@ -47,6 +49,7 @@ import BBCClient
             guard method == "POST" else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
             if path == "/v1/media/upload" {
                 guard mode == .full else { return readOnlyDenied }
+                guard keys.allows(keyID,method:"send") else { return keyDenied }
                 guard !uploading, let filename = headers["x-bbc-filename"] else { throw ActionFailure.invalid }
                 uploading = true; defer { uploading = false }
                 let store = try MediaStore(directory: keys.directory.appendingPathComponent("media"))
@@ -68,6 +71,7 @@ import BBCClient
             ]
             guard let operationMethod = endpointMethods[path], var params = request.object else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
             guard mode.allows(method:operationMethod) else { return readOnlyDenied }
+            guard keys.allows(keyID,method:operationMethod) else { return keyDenied }
             let observational = ["messages.after","messages.status","messages.search","availability","media.download","read.status","media.visual","media.transcribe","webhooks.list","schedule.get","schedule.list"].contains(operationMethod)
             if operationMethod == "send" {
                 params["service"] = .string("imessage"); params["allow_sms_fallback"] = .bool(false)
@@ -131,6 +135,7 @@ import BBCClient
     }
     func keysChanged() { for task in typing.values { task.cancel() }; typing.removeAll() }
     private var readOnlyDenied: Response { .init(status:403,value:.object(["ok":.bool(false),"uncertain":.bool(false),"error":.string("readonly_mode")])) }
+    private var keyDenied: Response { .init(status:403,value:.object(["ok":.bool(false),"uncertain":.bool(false),"error":.string("key_readonly")])) }
     func startServices() { webhooks?.start(); if mode == .full { schedules?.start() } }
     func stop() { keysChanged(); webhooks?.stop(); schedules?.stop() }
 }
