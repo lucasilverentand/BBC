@@ -30,7 +30,7 @@ struct IPNetwork {
         return remaining == 0 || (bytes[full] ^ address[full]) & (UInt8.max << (8-remaining)) == 0
     }
     static func address(_ text: String) -> [UInt8]? {
-        guard !text.isEmpty, !text.utf8.contains(0), text.utf8.count <= 45 else { return nil }
+        guard !text.isEmpty, !text.contains("%"), !text.utf8.contains(0), text.utf8.count <= 45 else { return nil }
         var v4 = in_addr(), v6 = in6_addr()
         if inet_pton(AF_INET,text,&v4) == 1 { return withUnsafeBytes(of:&v4) { Array($0) } }
         if inet_pton(AF_INET6,text,&v6) == 1 { return withUnsafeBytes(of:&v6) { Array($0) } }
