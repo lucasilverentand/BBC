@@ -39,8 +39,11 @@ enum BBCMessagesActions {
             } else {
                 phase = "request_validation"
                 let parameters = try request.validated(), guid = parameters.message_guid!
+                phase = "database_open"
                 let database = try MessagesDatabase(url:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/chat.db"))
+                phase = "message_identity"
                 try database.verify(chat:parameters.chat_guid,message:guid)
+                phase = "native_preparation"
                 if request.method == "read.status" {
                     let unread = try database.unread(chat:parameters.chat_guid)
                     receipt = ["ok":true,"observation_only":true,"chat_guid":parameters.chat_guid,"message_guid":guid,"target_read":!unread.contains(guid),"native_unread_count":unread.count]
@@ -65,9 +68,7 @@ enum BBCMessagesActions {
                     fields["method"] = .string(request.method)
                     if request.method == "link" { fields["text"] = .string(parameters.url!) }
                     if request.method == "tapback" {
-                        let column = try database.optionalMessageColumn("balloon_bundle_id")
-                        let balloon = try database.rows("SELECT \(column) FROM message WHERE guid=?1 LIMIT 2",[guid])
-                        fields["associated_message_guid"] = .string((balloon.first?.first?.isEmpty == false ? "bp:" : "p:0/") + guid)
+                        fields["associated_message_guid"] = .string(try database.reactionReference(chat:parameters.chat_guid,message:guid))
                     }
                     phase = "native_dispatch"
                     let packet = BBCJSONValue.object(fields)
@@ -111,6 +112,18 @@ enum BBCMessagesActions {
 }
 
 extension MessagesDatabase {
+    func reactionReference(chat: String, message: String) throws -> String {
+        try verify(chat:chat,message:message)
+        let column = try optionalMessageColumn("balloon_bundle_id")
+        let matches = try rows("""
+            SELECT \(column) FROM message m
+            JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id
+            WHERE m.guid=?1 AND c.guid=?2 LIMIT 2
+            """,[message,chat])
+        guard matches.count == 1 else { throw ActionFailure.invalid }
+        return (matches[0][0].isEmpty ? "p:0/" : "bp:") + message
+    }
+
     func confirmedNativeReaction(chat: String, target: String, sent: String, reaction: String, remove: Bool, after: Int64) throws -> Bool {
         let index = NativeRequest.reactions.firstIndex(of:reaction)
         let type = (remove ? 3000 : 2000) + (index ?? 6)

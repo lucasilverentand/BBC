@@ -22,6 +22,12 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: bash script/prepare_icon.sh
       - run: bash script/prepare_bridge.sh
+      - name: Verify Messages bridge ABI
+        run: |
+          for arch in arm64 arm64e x86_64; do
+            xcrun lipo -verify_arch "$arch" build/NativeBridge/BBCMessagesBridge.dylib
+          done
+          test "$(xcrun vtool -show-build build/NativeBridge/BBCMessagesBridge.dylib | awk '$1 == "platform" {print $2}' | sort -u)" = MACCATALYST
       - run: python3 script/test_swift.py NativeBridge
       - run: bash script/prepare_native.sh
       - run: python3 script/test_swift.py NativeMessages

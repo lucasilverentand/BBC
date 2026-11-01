@@ -9,6 +9,16 @@ import BBCClient
 @testable import BBCMessagesActions
 
 final class RichMessagingTests: XCTestCase {
+    func testCustomTapbackAddAndRemoveDoNotRequireReadAuthorization() throws {
+        for remove in [false,true] {
+            let data = try JSONSerialization.data(withJSONObject:["method":"tapback","params":["chat_guid":"any;-;fixture@example.test","message_guid":UUID().uuidString,"reaction":"🦥","remove":remove]])
+            let parameters = try JSONDecoder().decode(NativeRequest.self,from:data).validated()
+            XCTAssertEqual(parameters.reaction,"🦥")
+            XCTAssertEqual(parameters.remove,remove)
+            XCTAssertNil(parameters.read_guids)
+        }
+    }
+
     func testEmojiValidationPreservesComposedEmojiAndRejectsText() throws {
         for emoji in ["🎉", "👍🏽", "👩🏽‍💻", "🇳🇱", "1️⃣", "❤️", "👨‍👩‍👧‍👦"] {
             XCTAssertTrue(EmojiTapback.valid(emoji), emoji)

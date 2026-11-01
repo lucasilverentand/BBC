@@ -43,6 +43,17 @@ final class DatabaseTests: XCTestCase {
             XCTAssertThrowsError(try database.confirmedReply(chat:chat,root:guid,text:"answer",after:before))
         }
     }
+    func testReactionReferenceUsesExactChatAndOptionalBalloonColumn() throws {
+        try fixture { database,db in
+            XCTAssertEqual(try database.reactionReference(chat:chat,message:guid),"p:0/"+guid)
+            XCTAssertEqual(sqlite3_exec(db,"ALTER TABLE message ADD COLUMN balloon_bundle_id TEXT; UPDATE message SET balloon_bundle_id='com.apple.messages.URLBalloonProvider'",nil,nil,nil),SQLITE_OK)
+            XCTAssertEqual(try database.reactionReference(chat:chat,message:guid),"bp:"+guid)
+            XCTAssertThrowsError(try database.reactionReference(chat:"any;-;other@example.test",message:guid))
+            XCTAssertEqual(sqlite3_exec(db,"UPDATE message SET balloon_bundle_id=''",nil,nil,nil),SQLITE_OK)
+            XCTAssertEqual(try database.reactionReference(chat:chat,message:guid),"p:0/"+guid)
+        }
+    }
+
     func testPrivateReactionConfirmationRequiresItsExactNewOwnEvent() throws {
         try fixture { database,db in
             XCTAssertEqual(sqlite3_exec(db,"ALTER TABLE message ADD COLUMN associated_message_emoji TEXT; ALTER TABLE message ADD COLUMN is_sent INTEGER; ALTER TABLE message ADD COLUMN error INTEGER",nil,nil,nil),SQLITE_OK)
