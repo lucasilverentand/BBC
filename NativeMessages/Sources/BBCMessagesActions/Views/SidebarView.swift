@@ -3,6 +3,14 @@ import SwiftUI
 enum AppPage: String, CaseIterable, Identifiable {
     case server = "Server", keys = "API Keys", logs = "Logs", settings = "Settings"
     var id: Self { self }
+    var shortcut: KeyEquivalent {
+        switch self {
+        case .server: "1"
+        case .keys: "2"
+        case .logs: "3"
+        case .settings: "4"
+        }
+    }
     var symbol: String {
         switch self {
         case .server: "globe"

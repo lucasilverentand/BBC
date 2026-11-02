@@ -16,6 +16,15 @@ struct BlueBubbleClubApp: App {
             ContentView(model: delegate.model).frame(minWidth: 760, minHeight: 540)
         }.defaultSize(width: 920, height: 680)
             .defaultLaunchBehavior(.suppressed)
+            .commands {
+                CommandGroup(replacing: .saveItem) {
+                    APIStartStopCommand(model: delegate.model)
+                }
+                CommandMenu("Go") { PageNavigationMenu(model: delegate.model) }
+                CommandGroup(replacing: .appSettings) {
+                    SettingsShortcut(model: delegate.model)
+                }
+            }
         MenuBarExtra("Blue Bubble Club", systemImage: "message.fill") {
             MenuBarContent(model: delegate.model)
         }
@@ -24,32 +33,16 @@ struct BlueBubbleClubApp: App {
 
 private struct MenuBarContent: View {
     let model: AppModel
-    @AppStorage("apiPort") private var port = 7861
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Text(model.running ? "API running" : model.starting ? "API starting…" : "API stopped")
-        Button(model.running || model.starting ? "Stop API" : "Start API") {
-            if model.running || model.starting { model.stop() }
-            else { model.start(port: port) }
-        }
-        if model.mode == .full {
-            Button(model.nativeStarting ? "Connecting native messaging…" : model.nativeConnected ? "Disconnect native messaging" : "Connect native messaging") {
-                if model.nativeConnected { model.stopNativeBridge() }
-                else { model.startNativeBridge() }
-            }
-            .disabled(model.nativeStarting)
-        }
+        APIStartStopCommand(model: model)
         if model.error != nil {
             Button("View error…") { show(.server) }
         }
         Divider()
-        Button("Server…", systemImage: "globe") { show(.server) }
-            .keyboardShortcut("o")
-        Button("API Keys…", systemImage: "key") { show(.keys) }
-        Button("Logs…", systemImage: "list.bullet.rectangle") { show(.logs) }
-        Button("Settings…", systemImage: "gearshape") { show(.settings) }
-            .keyboardShortcut(",")
+        PageNavigationMenu(model: model)
         Divider()
         Button("Quit Blue Bubble Club") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
@@ -59,6 +52,47 @@ private struct MenuBarContent: View {
         model.selectedPage = page
         openWindow(id: "main")
         NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+private struct APIStartStopCommand: View {
+    let model: AppModel
+    @AppStorage("apiPort") private var port = 7861
+
+    var body: some View {
+        Button(model.running || model.starting ? "Stop API" : "Start API") {
+            if model.running || model.starting { model.stop() }
+            else { model.start(port: port) }
+        }.keyboardShortcut("s")
+    }
+}
+
+private struct PageNavigationMenu: View {
+    let model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        ForEach(AppPage.allCases) { page in
+            Button("\(page.rawValue)…", systemImage: page.symbol) {
+                model.selectedPage = page
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            .keyboardShortcut(page.shortcut)
+        }
+    }
+}
+
+private struct SettingsShortcut: View {
+    let model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings…") {
+            model.selectedPage = .settings
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+        }.keyboardShortcut(",")
     }
 }
 

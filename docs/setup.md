@@ -2,7 +2,7 @@
 
 BBC runs in the macOS user signed into Messages. Its app contains the API server and BBC's own native bridge; no separate messaging server or helper installation is needed.
 
-BBC runs in the menu bar without a Dock icon. Use its message-bubble menu bar icon to start or stop the API, connect or disconnect native messaging, or open **Server…**, **API Keys…** or **Settings…**. The Settings shortcut is **⌘,**. Closing the window keeps the app and API running; choose **Quit Blue Bubble Club** from the menu to exit. Startup options apply when the app launches, even while its window is closed.
+BBC runs in the menu bar without a Dock icon. Use its message-bubble menu bar icon to start or stop the API or open **Server…**, **API Keys…** or **Settings…**. Page shortcuts are **⌘1** Server, **⌘2** API Keys, **⌘3** Logs and **⌘4** Settings. **⌘,** also opens Settings. **⌘S** starts or stops the API. Closing the window keeps the app and API running; choose **Quit Blue Bubble Club** from the menu to exit. Startup options apply when the app launches, even while its window is closed.
 
 ## Choose what to enable
 
