@@ -75,6 +75,16 @@ Send `{"chat_guid":"…","message_guid":"…","url":"https://example.com","read_
 
 Message pages include `links`: the URL and, when present in Apple’s rich-link payload, title, summary, site name and preview image/icon attachment GUIDs. `preview: false` means only a URL was detected in text. Metadata parsing makes no network requests. Download preview images through the attachment endpoint.
 
+## Native message row types
+
+Message pages preserve the database's `item_type` separately from direction,
+service and reaction metadata. Ordinary message items use `0`; system changes
+can have other values, including `3` for conversation changes. A non-reaction
+incoming row is not necessarily an ordinary message. If the native column or
+value is unavailable, `item_type` is `null`, not an assumed zero. Consumers that
+admit user commands should require an explicitly observed ordinary message type
+alongside their own sender, conversation and authority checks.
+
 ## Threading
 
 A message page preserves `guid`, `chat_guid`, `reply_to_guid` and `thread_root_guid` separately. Apple's native thread originator identifies the reply root; it does not always expose an immediate parent reply. Top-level messages use their own GUID as `thread_root_guid`. Do not infer a thread from the latest message, matching text or another conversation with the same person.

@@ -42,6 +42,8 @@ final class LocalReaderTests: XCTestCase {
         let database = try MessagesDatabase(url: url)
         let first = try database.page(["limit": .number(2), "attachments": .bool(true)])
         guard case .array(let rows) = first.object?["messages"] else { return XCTFail("Expected messages") }
+        XCTAssertTrue(rows[0].object?.keys.contains("item_type") == true)
+        XCTAssertNil(rows[0].object?["item_type"]?.numberValue, "Missing native metadata must remain unknown")
         XCTAssertEqual(rows.count, 2); XCTAssertEqual(first.object?["next_rowid"]?.numberValue, 2)
         XCTAssertEqual(rows[0].object?["thread_root_guid"]?.string, root)
         XCTAssertEqual(rows[1].object?["reply_to_guid"]?.string, root)
@@ -73,6 +75,18 @@ final class LocalReaderTests: XCTestCase {
         XCTAssertEqual(scoped.object?["next_rowid"]?.numberValue, 3)
         XCTAssertThrowsError(try database.page(["chat_guid": .string("")]))
         XCTAssertThrowsError(try database.page(["chat_guid": .number(1)]))
+        XCTAssertEqual(sqlite3_exec(connection, """
+            ALTER TABLE message ADD COLUMN item_type INTEGER;
+            UPDATE message SET item_type=0;
+            INSERT INTO message(guid,text,handle_id,is_from_me,date,service,item_type)
+            VALUES('system-event','Conversation background changed',1,0,5,'iMessage',3);
+            INSERT INTO chat_message_join VALUES(1,last_insert_rowid());
+            """, nil, nil, nil), SQLITE_OK)
+        let typed = try database.page(["chat_guid": .string("any;-;fixture@example.test")])
+        guard case .array(let typedRows) = typed.object?["messages"] else { return XCTFail("Expected typed rows") }
+        XCTAssertEqual(typedRows[0].object?["item_type"]?.numberValue, 0)
+        XCTAssertEqual(typedRows.last?.object?["item_type"]?.numberValue, 3)
+        XCTAssertEqual(typedRows.last?.object?["is_reaction"]?.bool, false, "A system row is not necessarily a reaction")
 
     }
 }
