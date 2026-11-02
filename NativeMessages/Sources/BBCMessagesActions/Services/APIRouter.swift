@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Network
 import BBCClient
 
 @MainActor final class APIRouter {
@@ -18,9 +19,12 @@ import BBCClient
     struct Response { let status: Int; let value: BBCJSONValue }
     struct Operation: Codable { let fingerprint: String; var result: BBCJSONValue? }
 
-    func handle(method: String, path: String, headers: [String: String], body: Data) async -> Response {
+    func handle(method: String, path: String, headers: [String: String], body: Data, peer: NWEndpoint? = .hostPort(host: .ipv4(.loopback), port: 1)) async -> Response {
         guard let authorization = headers["authorization"], authorization.hasPrefix("Bearer "),
               let keyID = keys.authenticate(String(authorization.dropFirst(7))) else { return .init(status: 401, value: .object(["error": .string("unauthorized")])) }
+        guard keys.permits(keyID, endpoint: peer) else {
+            return .init(status: 403, value: .object(["error": .string("client_address_denied")]))
+        }
         do {
             if method == "GET", path.hasPrefix("/v1/operations/") {
                 guard let id = UUID(uuidString: String(path.dropFirst("/v1/operations/".count))) else { throw ActionFailure.invalid }
@@ -39,7 +43,7 @@ import BBCClient
                 if schedules != nil { methods += ["schedule.create","schedule.update","schedule.cancel","schedule.get","schedule.list"].map(BBCJSONValue.string) }
                 fields["methods"] = .array(methods.filter { $0.string.map { mode.allows(method:$0) && keys.allows(keyID,method:$0) } == true })
                 fields["key_access"] = .string(access.rawValue)
-                fields["operating_mode"] = .string(mode.rawValue)
+                fields["operating_mode"] = .string(mode == .readOnly || access == .readOnly ? "read-only" : "full")
                 if mode == .readOnly || !keys.allows(keyID,method:"send") {
                     fields["native_bridge_ready"] = .bool(false)
                     fields["native_bridge"] = .object(["ready":.bool(false),"reason":.string("read_only_mode"),"capabilities":.array([])])

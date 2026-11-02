@@ -7,6 +7,8 @@ import AppKit
 import CoreServices
 
 @MainActor @Observable final class AppModel {
+    let log = AppLog()
+    var selectedPage: AppPage? = .server
     private(set) var keys: [APIKeyRecord] = []
     private(set) var running = false
     private(set) var starting = false
@@ -14,17 +16,12 @@ import CoreServices
     private(set) var loginNeedsApproval = LoginItem.needsApproval
     private(set) var updatingLogin = false
     private var opened = false
-    private(set) var mode = OperatingMode.current
+    var mode: OperatingMode { keys.contains { $0.access == .full } ? .full : .readOnly }
     var permissionSteps: [PermissionStep] { mode == .readOnly ? [.fullDiskAccess] : PermissionStep.allCases }
     var grantedPermissionCount: Int { permissionSteps.filter { permissions.granted($0) }.count }
-    func setMode(_ value: OperatingMode) {
-        guard !running, !starting, !nativeStarting else { return }
-        nativeHost.stop(); nativeConnected = false
-        scheduleService?.stop()
-        mode = value; UserDefaults.standard.set(value.rawValue,forKey:"operatingMode")
-        refreshNativeBridge()
+    var error: String? {
+        didSet { if let error, error != oldValue { log.record(error, level: .error) } }
     }
-    var error: String?
     private(set) var permissions = PermissionStatus()
     @ObservationIgnored private let permissionHelper = PermissionHelperPanel()
     private let store: APIKeyStore?
@@ -39,14 +36,22 @@ import CoreServices
     private(set) var nativeConnected = false
     private(set) var nativeRequirements = "Checking native bridge requirements…"
     init() {
-        do { let value = try APIKeyStore(); store = value; keys = value.keys }
+        do {
+            let legacy = UserDefaults.standard.string(forKey: "operatingMode")
+            let legacyMode = legacy.map { OperatingMode(rawValue: $0) ?? .readOnly }
+            let value = try APIKeyStore(legacyMode: legacyMode, legacyNetworkAccess: UserDefaults.standard.bool(forKey: "allowNetwork"))
+            store = value; keys = value.keys
+            UserDefaults.standard.removeObject(forKey: "operatingMode")
+        }
         catch { store = nil; self.error = "Could not open the local API key store. Check its ownership and permissions." }
     }
     func appOpened() {
         guard !opened else { return }; opened = true
+        log.record("App launched.")
+        if let error { log.record(error, level: .error) }
         if UserDefaults.standard.bool(forKey: "startAPIOnLaunch") {
             let port = UserDefaults.standard.object(forKey: "apiPort") as? Int ?? 7861
-            start(port: port, allowNetwork: UserDefaults.standard.bool(forKey: "allowNetwork"))
+            start(port: port)
         }
         if UserDefaults.standard.bool(forKey:"startNativeBridgeOnLaunch") { startNativeBridge() }
     }
@@ -56,7 +61,7 @@ import CoreServices
     func setStartAtLogin(_ value: Bool) async {
         guard !updatingLogin else { return }; updatingLogin = true
         defer { updatingLogin = false; refreshLoginItem() }
-        do { try await LoginItem.setEnabled(value) }
+        do { try await LoginItem.setEnabled(value); log.record(value ? "Start at login enabled." : "Start at login disabled.") }
         catch { self.error = "Could not update Start at login. Check Blue Bubble Club in System Settings → General → Login Items." }
     }
     func refreshPermissions() { permissions = PermissionStatus.current() }
@@ -66,7 +71,9 @@ import CoreServices
             let readiness = await Task.detached { BridgeReadiness.current() }.value
             let status = await Task.detached { NativeBridgeClient.status() }.value
             guard mode == .full else { return }
-            nativeConnected = status.object?["ready"]?.bool == true
+            let connected = status.object?["ready"]?.bool == true
+            if connected != nativeConnected { log.record(connected ? "Native messaging connected." : "Native messaging disconnected.") }
+            nativeConnected = connected
             if nativeConnected { nativeRequirements = "Native messaging connected. No mouse or keyboard automation." }
             else if readiness.sip == .enabled { nativeRequirements = "Native messaging requires a host configured for private APIs. SIP is enabled. BBC does not change security settings." }
             else if !readiness.allowed { nativeRequirements = "Native messaging host setup is incomplete. Check SIP and library validation in the setup guide." }
@@ -75,21 +82,24 @@ import CoreServices
     }
     func startNativeBridge() {
         guard mode == .full, !nativeStarting else { return }; nativeStarting = true
+        log.record("Connecting native messaging.")
         Task {
             defer { nativeStarting = false; refreshNativeBridge() }
             do { try await nativeHost.start() }
             catch { self.error = "Could not start the native bridge. Check host setup and whether Messages can quit. No UI fallback was used." }
         }
     }
-    func stopNativeBridge() { nativeHost.stop(); nativeConnected = false; refreshNativeBridge() }
+    func stopNativeBridge() { log.record("Disconnecting native messaging."); nativeHost.stop(); nativeConnected = false; refreshNativeBridge() }
     func showPermissionHelper() { refreshPermissions(); permissionHelper.show(model: self) }
     func closePermissionHelper() { permissionHelper.close() }
     func setUpPermission(_ step: PermissionStep) {
         guard permissionSteps.contains(step) else { return }
-        showPermissionHelper()
+        log.record("Opening \(step.title) settings.")
+        NSWorkspace.shared.open(step.settingsURL)
         switch step {
-        case .fullDiskAccess: NSWorkspace.shared.open(step.settingsURL)
+        case .fullDiskAccess: showPermissionHelper()
         case .automation:
+            closePermissionHelper()
             Task {
                 await requestAutomation(); refreshPermissions()
                 if !permissions.automation { NSWorkspace.shared.open(step.settingsURL) }
@@ -106,27 +116,34 @@ import CoreServices
             if status != noErr { error = "Messages Automation permission was not granted." }
         } catch { self.error = "Open Messages in this macOS account before allowing Automation." }
     }
-    func createKey(name: String, access: APIKeyAccess = .readOnly) -> String? {
-        do { guard let store else { throw ActionFailure.unavailable }; let secret = try store.create(name: name,access:access); keys = store.keys; return secret }
+    func createKey(name: String, access: APIKeyAccess = .readOnly, allowedClients: String = "", allowNetwork: Bool = false) -> String? {
+        do { guard let store else { throw ActionFailure.unavailable }; let secret = try store.create(name: name,access:access,allowedClients:allowedClients,allowNetwork:allowNetwork); keys = store.keys; log.record("API key created."); return secret }
         catch { self.error = "Could not create an API key."; return nil }
     }
-    func revoke(_ id: UUID) {
-        do { guard let store else { throw ActionFailure.unavailable }; try store.revoke(id); keys = store.keys; router?.keysChanged() }
-        catch { self.error = "Could not revoke the API key." }
-    }
-    func updateKey(_ id: UUID, access: APIKeyAccess) -> Bool {
+    func rotateKey(_ id: UUID) -> String? {
         do {
             guard let store else { throw ActionFailure.unavailable }
-            try store.updateAccess(id,access:access); keys = store.keys; router?.keysChanged(); return true
+            let secret = try store.rotate(id)
+            keys = store.keys
+            log.record("API key rotated.")
+            return secret
+        } catch { self.error = "Could not rotate the API key."; return nil }
+    }
+    func revoke(_ id: UUID) {
+        do { guard let store else { throw ActionFailure.unavailable }; try store.revoke(id); keys = store.keys; router?.keysChanged(); log.record("API key revoked.") }
+        catch { self.error = "Could not revoke the API key." }
+    }
+    func updateKey(_ id: UUID, name: String, access: APIKeyAccess, allowedClients: String, allowNetwork: Bool) -> Bool {
+        do {
+            guard let store else { throw ActionFailure.unavailable }
+            try store.update(id,access:access,allowedClients:allowedClients,allowNetwork:allowNetwork,name:name); keys = store.keys; router?.keysChanged(); log.record("API key settings updated."); return true
         } catch { self.error = "Could not update the API key."; return false }
     }
-    func start(port: Int, allowNetwork: Bool) {
+    func start(port: Int) {
         guard server == nil else { return }
-        guard let networks = try? IPNetwork.parseList(UserDefaults.standard.string(forKey:"allowedClientNetworks") ?? "") else {
-            error = "Enter valid IPv4/IPv6 addresses or CIDR ranges in Allowed clients."; return
-        }
         do {
-            guard let store, !store.keys.isEmpty, let port = UInt16(exactly: port), port > 0 else { error = "Create an API key and choose a port from 1 to 65535."; return }
+            guard let store else { error = "Could not open the API key store."; return }
+            guard let port = UInt16(exactly: port), port > 0 else { error = "Choose a port from 1 to 65535."; return }
             let fd = open(store.directory.appendingPathComponent("listener.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
             guard fd >= 0 else { throw ActionFailure.unavailable }
             guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { close(fd); throw ActionFailure.busy }
@@ -139,26 +156,30 @@ import CoreServices
             if let cached = webhookService { webhooks = cached }
             else { webhooks = try WebhookService(keys:store); webhookService = webhooks }
             var schedules: LocalScheduleService?
-            if mode == .full, let cached = scheduleService { schedules = cached }
-            else if mode == .full {
+            if let cached = scheduleService { schedules = cached }
+            else {
                 schedules = try LocalScheduleService(directory:store.directory.appendingPathComponent("schedules",isDirectory:true),
                     isKeyActive:{ id in store.allows(id,method:"send") },execute:{ try await client.request($0) },
                     mediaExpiresAt:{ id in try MediaStore(directory:store.directory.appendingPathComponent("media")).resolve(id).0.created.addingTimeInterval(MediaStore.lifetime) })
                 scheduleService = schedules
             }
-            let router = APIRouter(keys:store,webhooks:webhooks,schedules:schedules,mode:mode) { try await client.request($0) }
+            let router = APIRouter(keys:store,webhooks:webhooks,schedules:schedules,mode:.full) { try await client.request($0) }
             self.router = router
-            let listener = try LocalAPIServer(host: allowNetwork ? "0.0.0.0" : "127.0.0.1", port: port, router: router,allowedNetworks:networks)
+            let listener = try LocalAPIServer(host: "0.0.0.0", port: port, router: router) { [weak self] method, status in
+                self?.log.record("\(method) request: HTTP \(status).", level: status >= 400 ? .error : .info)
+            }
             server = listener; starting = true; error = nil
+            log.record("Starting API on port \(port).")
             let generation = UUID(); listenerID = generation
             listener.start { [weak self] ready in Task { @MainActor in
                 guard let self, self.listenerID == generation else { return }; self.starting = false; self.running = ready
-                if ready { self.router?.startServices() }
+                if ready { self.log.record("API running."); self.router?.startServices() }
                 else if self.server != nil { self.error = "The API listener stopped. Check the port and try again."; self.stop() }
             } }
         } catch { stop(); self.error = "Could not start the local API. Check the port and whether another BBC instance is running." }
     }
     func stop() {
+        if server != nil { log.record("API stopped.") }
         listenerID = UUID()
         let oldServer = server; server = nil; oldServer?.stop(); router?.stop(); router = nil
         if lock >= 0 { flock(lock, LOCK_UN); close(lock); lock = -1 }
