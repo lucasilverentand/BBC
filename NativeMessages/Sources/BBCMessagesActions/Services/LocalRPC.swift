@@ -122,11 +122,12 @@ extension MessagesDatabase {
         let attachmentColumns = try rows("PRAGMA table_info(attachment)", []).map { $0[1] }
         let transferName = attachmentColumns.contains("transfer_name") ? "COALESCE(a.transfer_name,'')" : "''"
         let audioColumn = try optionalMessageColumn("is_audio_message", fallback: "0")
+        let itemTypeColumn = try optionalMessageColumn("item_type", fallback: "NULL")
         let values = try rows("""
             SELECT m.ROWID,m.guid,c.guid,COALESCE(h.id,''),COALESCE(m.text,''),m.is_from_me,
                 m.date,COALESCE(m.service,''),COALESCE(m.thread_originator_guid,''),
                 COALESCE(m.associated_message_type,0),COALESCE(m.associated_message_guid,''),
-                COALESCE(hex(m.attributedBody),''), \(emojiColumn), CASE WHEN length(\(payloadColumn))<=256000 THEN hex(\(payloadColumn)) ELSE '' END, \(audioColumn)
+                COALESCE(hex(m.attributedBody),''), \(emojiColumn), CASE WHEN length(\(payloadColumn))<=256000 THEN hex(\(payloadColumn)) ELSE '' END, \(audioColumn), \(itemTypeColumn)
             FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID
             JOIN chat c ON c.ROWID=j.chat_id LEFT JOIN handle h ON h.ROWID=m.handle_id
             WHERE m.ROWID>CAST(?1 AS INTEGER) AND (?3='' OR c.guid=?3) ORDER BY m.ROWID,c.guid LIMIT ?2
@@ -150,6 +151,7 @@ extension MessagesDatabase {
                 "thread_root_guid": .string(root ?? row[1]), "attachments": .array(attachments),
                 "links": .array(RichLinks.decode(Data(hex: row[13]), text: text, attachmentGUIDs: attachmentRows.filter { $0[5].lowercased().hasSuffix(".pluginpayloadattachment") }.map { $0[0] })),
                 "is_audio_message": .bool(row[14] == "1"),
+                "item_type": Int(row[15]).map { BBCJSONValue.number(Double($0)) } ?? .null,
                 "reaction_emoji": row[12].isEmpty ? .null : .string(row[12]),
                 "is_reaction": .bool((2000..<4000).contains(reaction)), "reaction_type": .number(Double(reaction)),
                 "is_reaction_add": .bool((2000..<3000).contains(reaction)),
