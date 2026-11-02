@@ -1,16 +1,14 @@
 import Foundation
 
-/// Per-login application policy. No HTTP request can change it.
+/// Access profiles shared by token authorization and internal routing.
 enum OperatingMode: String, CaseIterable, Identifiable {
     case full = "full"
     case readOnly = "read-only"
     var id: String { rawValue }
     var title: String { self == .full ? "Full API" : "Read-only · watch and receive" }
-    static var current: Self {
-        let value = UserDefaults.standard.string(forKey:"operatingMode")
-        // Preserve existing installations; unknown configured values fail closed.
-        return value == nil ? .full : (Self(rawValue:value!) ?? .readOnly)
-    }
+    // Runtime access is authorized per API key. The former app preference is
+    // migrated into key permissions when the app opens its store.
+    static var current: Self { .full }
     func allows(method: String) -> Bool {
         self == .full || Self.observerMethods.contains(method)
     }

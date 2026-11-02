@@ -26,8 +26,8 @@ enum PermissionStep: String, CaseIterable, Identifiable {
     }
     var instruction: String {
         switch self {
-        case .fullDiskAccess: "Drag the app into the list, then turn its switch on. This lets BBC read your Messages database."
-        case .automation: "Choose Allow when macOS asks BBC to control Messages. Messages must be signed in on this account."
+        case .fullDiskAccess: "Add BBC in Settings and turn it on."
+        case .automation: "Allow BBC to control Messages."
         }
     }
     var settingsURL: URL {

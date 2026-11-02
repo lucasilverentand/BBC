@@ -43,6 +43,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
+<key>LSUIElement</key><true/>
 <key>NSAppleEventsUsageDescription</key><string>Blue Bubble Club sends messages through your local Messages account when an authorized API client requests it.</string>
 </dict></plist>
 PLIST

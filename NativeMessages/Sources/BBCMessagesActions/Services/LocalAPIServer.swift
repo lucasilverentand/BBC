@@ -7,10 +7,11 @@ final class LocalAPIServer: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "club.bluebubble.http")
     private let router: APIRouter
-    private let allowedNetworks: [IPNetwork]
+    private let onResponse: @MainActor @Sendable (String, Int) -> Void
     private var connections: [UUID: NWConnection] = [:] // queue-confined
-    init(host: String, port: UInt16, router: APIRouter, allowedNetworks: [IPNetwork] = []) throws {
-        self.router = router; self.allowedNetworks = allowedNetworks
+    init(host: String, port: UInt16, router: APIRouter,
+         onResponse: @escaping @MainActor @Sendable (String, Int) -> Void = { _, _ in }) throws {
+        self.router = router; self.onResponse = onResponse
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!)
         listener = try NWListener(using: parameters)
@@ -31,9 +32,6 @@ final class LocalAPIServer: @unchecked Sendable {
             if case .failed = state { connection.cancel() }
         }
         connection.start(queue: queue)
-        guard IPNetwork.permits(connection.endpoint,rules:allowedNetworks) else {
-            reply(connection,status:403,value:.object(["error":.string("client_address_denied")])); return
-        }
         queue.asyncAfter(deadline: .now() + 60) { [weak connection] in connection?.cancel() }
         receive(connection, buffer: RequestBuffer())
     }
@@ -65,7 +63,8 @@ final class LocalAPIServer: @unchecked Sendable {
             let body = Data(buffer[range.upperBound...])
             let method = String(first[0]), path = String(first[1]), requestHeaders = headers
             Task { @MainActor in
-                let response = await self.router.handle(method: method, path: path, headers: requestHeaders, body: body)
+                let response = await self.router.handle(method: method, path: path, headers: requestHeaders, body: body, peer: connection.endpoint)
+                self.onResponse(method, response.status)
                 self.reply(connection, status: response.status, value: response.value)
             }
         }
