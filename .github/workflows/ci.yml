@@ -6,11 +6,22 @@ on:
 permissions:
   contents: read
 jobs:
+  portable-linux:
+    runs-on: ubuntu-24.04
+    container: swift:6.0.3-jammy
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install fixture and SQLite dependencies
+        run: apt-get update && apt-get install -y --no-install-recommends python3 libsqlite3-dev
+      - run: python3 -m unittest discover -s script -p 'test_*.py'
+      - run: python3 script/test_swift.py .
   transport:
     runs-on: macos-26
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: python3 -m unittest discover -s script -p 'test_*.py'
       - run: swift build
       - run: python3 script/test_swift.py .
   native:

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Connect to the API hosted by the Blue Bubble Club Mac app.
 public struct BBCHTTPClient: Sendable {

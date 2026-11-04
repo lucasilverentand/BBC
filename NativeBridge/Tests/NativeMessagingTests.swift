@@ -92,8 +92,22 @@ private let chatID = "any;-;fixture@example.test"
     }
 }
 
+@objc final class FixtureDelayedDetector: NSObject {
+    nonisolated(unsafe) static var callback: ((Int, Bool, Any?) -> Void)?
+    nonisolated(unsafe) static var blockBeforeCallback = false
+    @objc class func sharedInstance() -> FixtureDelayedDetector { FixtureDelayedDetector() }
+    @objc(scanMessage:outgoing:waitUntilDone:completionBlock:)
+    func scan(_ message: FixtureMessage, outgoing: Bool, waitUntilDone: Bool, completion: @escaping (Int,Bool,Any?) -> Void) {
+        Self.callback = completion
+        if Self.blockBeforeCallback {
+            Thread.sleep(forTimeInterval: 0.05)
+            completion(0, true, nil)
+        }
+    }
+}
+
 final class NativeMessagingTests: XCTestCase {
-    override func setUp() { FixtureChat.shared = FixtureChat(); FixtureItem.ambiguous = false; FixtureFailingDetector.drainBeforeRaising = false }
+    override func setUp() { FixtureChat.shared = FixtureChat(); FixtureItem.ambiguous = false; FixtureFailingDetector.drainBeforeRaising = false; FixtureDelayedDetector.callback = nil; FixtureDelayedDetector.blockBeforeCallback = false }
     private var resolver: BBCNativeClassResolver {
         { name in
             switch name {
@@ -220,4 +234,36 @@ final class NativeMessagingTests: XCTestCase {
         XCTAssertEqual(receipts.count,1)
         XCTAssertEqual(receipts.first?["ok"] as? Bool,true)
     }
+    func testMissingScannerCallbackExpiresAndLateCallbacksCannotSend() {
+        assertScanTimeout(blockMainQueue: false)
+    }
+    func testScannerCallbackCannotSendWhenMainQueueDelayedItsDeadlineTimer() {
+        assertScanTimeout(blockMainQueue: true)
+    }
+    private func assertScanTimeout(blockMainQueue: Bool) {
+        FixtureDelayedDetector.blockBeforeCallback = blockMainQueue
+        let base = resolver
+        var receipts: [[String: Any]] = []
+        let done = expectation(description: "scan deadline")
+        BBCNativePerformWithScanTimeout(["method":"link", "chat_guid":chatID, "message_guid":targetID, "text":"https://example.test"], { name in
+            name == "IMDDController" ? FixtureDelayedDetector.self : base(name)
+        }, 0.02) {
+            receipts.append($0)
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 1)
+        XCTAssertEqual(receipts.count, 1)
+        XCTAssertEqual(receipts.first?["failure_code"] as? String, "native_link_scan_timeout")
+        XCTAssertEqual(receipts.first?["uncertain"] as? Bool, false)
+        XCTAssertEqual(FixtureChat.shared.sends, 0)
+        FixtureDelayedDetector.callback?(0, true, nil)
+        FixtureDelayedDetector.callback?(0, true, nil)
+        let drained = expectation(description: "late callbacks drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 1)
+        XCTAssertEqual(receipts.count, 1)
+        XCTAssertEqual(FixtureChat.shared.sends, 0)
+        FixtureDelayedDetector.callback = nil
+    }
+
 }

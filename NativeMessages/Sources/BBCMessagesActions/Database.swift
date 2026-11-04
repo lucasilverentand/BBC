@@ -171,7 +171,8 @@ struct NativeRequest: Decodable {
     var trace_id: String?
     struct Parameters: Decodable {
         let chat_guid: String
-        let message_guid: String?
+        var message_guid: String?
+        let reply_to: String?
         let reaction: String?
         let remove: Bool?
         let read_guids: [String]?
@@ -184,7 +185,12 @@ struct NativeRequest: Decodable {
     static let reactions = ["love", "like", "dislike", "laugh", "emphasis", "question"]
     static let beeperReactions = ["heart", "like", "dislike", "laugh", "emphasize", "question"]
     func validated() throws -> Parameters {
-        guard let params, ["tapback", "read", "read.status", "media.transcribe", "media.visual", "reply", "link", "typing.start"].contains(method), params.chat_guid.utf8.count <= 512,
+        guard var params else { throw ActionFailure.invalid }
+        if method == "reply", let alias = params.reply_to {
+            guard params.message_guid == nil || params.message_guid == alias else { throw ActionFailure.invalid }
+            params.message_guid = alias
+        }
+        guard ["tapback", "read", "read.status", "media.transcribe", "media.visual", "reply", "link", "typing.start"].contains(method), params.chat_guid.utf8.count <= 512,
               let guid = params.message_guid, UUID(uuidString: guid) != nil else { throw ActionFailure.invalid }
         if method == "tapback" { guard Self.reactions.contains(params.reaction ?? "") || EmojiTapback.valid(params.reaction ?? "") else { throw ActionFailure.invalid } }
         if ["media.transcribe", "media.visual"].contains(method) {

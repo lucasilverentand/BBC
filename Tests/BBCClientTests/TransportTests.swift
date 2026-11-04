@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 @testable import BBCClient
 
+#if os(macOS)
 final class TransportTests: XCTestCase {
     private func withHelper(_ body: String, run: (URL, URL) async throws -> Void) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -82,4 +83,6 @@ extension TransportTests {
         XCTAssertThrowsError(try canceled.run(executable:URL(fileURLWithPath:"/bin/sh"),arguments:["-c","exit 99"],input:Data("{}\n".utf8),typingSession:true))
     }
 }
+#endif
+
 #endif

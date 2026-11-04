@@ -106,6 +106,13 @@ import BBCClient
                 try encoder.encode(record).write(to: file, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
             }
+            // Reject local typing errors before reserving an operation that cannot dispatch.
+            if operationMethod == "typing.stop" {
+                guard params["typing_id"]?.string.flatMap(UUID.init(uuidString:)) != nil else { throw ActionFailure.invalid }
+            } else if operationMethod == "typing.start", let value = params["typing_id"] {
+                guard let raw = value.string, let id = UUID(uuidString: raw) else { throw ActionFailure.invalid }
+                guard typing[id] == nil else { throw ActionFailure.busy }
+            }
             try persist(.init(fingerprint: fingerprint)) // Intent precedes every mutation.
             let result: BBCJSONValue
             if operationMethod == "typing.stop" {
@@ -133,7 +140,12 @@ import BBCClient
                 catch { result = .object(["ok": .bool(false), "uncertain": .bool(true), "error": .string("reconcile_before_retrying")]) }
             }
             // Revocation stops new work; an already dispatched effect retains its receipt.
-            try persist(.init(fingerprint: fingerprint, result: result))
+            do { try persist(.init(fingerprint: fingerprint, result: result)) }
+            catch {
+                // The effect may already exist. Preserve its observed result for the
+                // caller; the durable intent still prevents replay with this key.
+                return .init(status: 200, value: result)
+            }
             return .init(status: 200, value: result)
         } catch { return .init(status: 400, value: .object(["error": .string("invalid_or_unavailable_request")])) }
     }

@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS("26.0")],
     products: [.library(name: "BBCClient", targets: ["BBCClient"])],
     targets: [
-        .systemLibrary(name: "BBCSQLite"),
+        .systemLibrary(name: "BBCSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"]), .brew(["sqlite3"])]),
         .target(name: "BBCClient", dependencies: ["BBCSQLite"]),
         .testTarget(name: "BBCClientTests", dependencies: ["BBCClient"])
     ]

@@ -10,4 +10,10 @@ FOUNDATION_EXPORT NSArray<NSString *> *BBCNativeCapabilities(BBCNativeClassResol
 FOUNDATION_EXPORT void BBCNativePerform(NSDictionary<NSString *, id> *request,
                                        BBCNativeClassResolver _Nullable resolver,
                                        BBCNativeCompletion completion);
+/// The timeout can be shortened by synthetic fixtures, but cannot exceed the
+/// production ten-second bound. It is never accepted from an IPC request.
+FOUNDATION_EXPORT void BBCNativePerformWithScanTimeout(NSDictionary<NSString *, id> *request,
+                                                      BBCNativeClassResolver _Nullable resolver,
+                                                      double scanTimeout,
+                                                      BBCNativeCompletion completion);
 NS_ASSUME_NONNULL_END

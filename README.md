@@ -51,6 +51,8 @@ Use a new UUID for each operation; reuse it when retrying the same request.
 
 [Setup guide](docs/setup.md) · [API guide](docs/api.md) · [Protocol](docs/protocol.md) · [Swift SDK](Sources/BBCClient)
 
+[Testing without iMessage](docs/testing.md)
+
 [MIT license](LICENSE) · [Third-party notices](NOTICE)
 
 ## Project guidance

@@ -99,13 +99,14 @@ private let advancedMessageID = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
     @objc var guid: String { "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB" }
 }
 @objc final class AdvancedTransferCenter: NSObject {
+    nonisolated(unsafe) static var creations = 0
     @objc class func sharedInstance() -> AdvancedTransferCenter { AdvancedTransferCenter() }
-    @objc(createNewOutgoingTransferWithLocalFileURL:) func transfer(_ url: URL) -> AdvancedTransfer { AdvancedTransfer() }
+    @objc(createNewOutgoingTransferWithLocalFileURL:) func transfer(_ url: URL) -> AdvancedTransfer { Self.creations += 1; return AdvancedTransfer() }
     @objc(createNewOutgoingGroupPhotoTransferWithLocalFileURL:) func photo(_ url: URL) -> AdvancedTransfer { AdvancedTransfer() }
 }
 
 final class AdvancedMessagingTests: XCTestCase {
-    override func setUp() { AdvancedChat.shared = AdvancedChat() }
+    override func setUp() { AdvancedChat.shared = AdvancedChat(); AdvancedTransferCenter.creations = 0 }
     private var resolver: BBCNativeClassResolver {
         { name in
             switch name {
@@ -201,4 +202,24 @@ final class AdvancedMessagingTests: XCTestCase {
         XCTAssertEqual(result["uncertain"] as? Bool,false)
         XCTAssertEqual(AdvancedChat.shared.mutationCount,0)
     }
+    func testMissingEffectSelectorRejectsBeforeCreatingTransfers() {
+        let base = resolver
+        var result: [String: Any] = [:]
+        BBCNativePerform(["method":"messages.multipart", "chat_guid":advancedChatID,
+                          "files":[["file_path":"/private/tmp/fixture.png"]],
+                          "effect":"com.apple.messages.effect.CKConfettiEffect"], { name in
+            name == "IMMessage" ? FixtureMessage.self : base(name)
+        }) { result = $0 }
+        XCTAssertEqual(result["failure_code"] as? String, "native_effect_unavailable")
+        XCTAssertEqual(result["uncertain"] as? Bool, false)
+        XCTAssertEqual(AdvancedTransferCenter.creations, 0)
+        XCTAssertEqual(AdvancedChat.shared.mutationCount, 0)
+    }
+    func testInvalidEffectRejectsBeforeCreatingTransfers() {
+        let result = perform("messages.multipart", fields: ["files":[["file_path":"/private/tmp/fixture.png"]], "effect":"invalid"])
+        XCTAssertEqual(result["failure_code"] as? String, "native_invalid_effect")
+        XCTAssertEqual(AdvancedTransferCenter.creations, 0)
+        XCTAssertEqual(AdvancedChat.shared.mutationCount, 0)
+    }
+
 }

@@ -105,7 +105,7 @@ NSArray<NSString *> *BBCNativeCapabilities(BBCNativeClassResolver resolver) {
     return features;
 }
 
-static void PerformWithMessageLoad(NSDictionary *request, BBCNativeClassResolver resolver, BOOL loadRequested, double loadDeadline, BBCNativeCompletion completion) {
+static void PerformWithMessageLoad(NSDictionary *request, BBCNativeClassResolver resolver, BOOL loadRequested, double loadDeadline, double scanTimeout, BBCNativeCompletion completion) {
     if ([AdvancedMethods() containsObject:request[@"method"] ?: NSNull.null]) { PerformAdvanced(request,resolver,completion); return; }
     __block BOOL attempted = NO;
     @try {
@@ -134,7 +134,7 @@ static void PerformWithMessageLoad(NSDictionary *request, BBCNativeClassResolver
                 // Request it once, then observe the exact target before any
                 // mutation. There is only one continuation and one dispatch.
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
-                    PerformWithMessageLoad(request,resolver,YES,loadDeadline,completion);
+                    PerformWithMessageLoad(request,resolver,YES,loadDeadline,scanTimeout,completion);
                 });
                 return;
             }
@@ -206,9 +206,20 @@ static void PerformWithMessageLoad(NSDictionary *request, BBCNativeClassResolver
             id detector = Invoke(Resolve(@"IMDDController",resolver),@"sharedInstance",@[]);
             // A callback can arrive more than once. Dispatch at most one send.
             __block BOOL finished = NO;
+            // Finish before the broker's 24-second deadline. Check the monotonic
+            // clock in the callback too: a blocked main queue can delay timers.
+            double scanDeadline = NSProcessInfo.processInfo.systemUptime + scanTimeout;
+            void (^expire)(void) = ^{
+                if (finished) return;
+                finished = YES;
+                completion(Failure(@"native_link_scan_timeout",NO));
+            };
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(scanTimeout*NSEC_PER_SEC)),dispatch_get_main_queue(),expire);
             void (^scanned)(NSInteger,BOOL,id) = ^(NSInteger status, BOOL success, id result) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    if (finished) return; finished = YES;
+                    if (finished) return;
+                    if (NSProcessInfo.processInfo.systemUptime >= scanDeadline) { expire(); return; }
+                    finished = YES;
                     @try {
                         Invoke(chat,@"sendMessage:onService:",@[message,service]);
                         id guid = Invoke(message,@"guid",@[]);
@@ -238,7 +249,12 @@ static void PerformWithMessageLoad(NSDictionary *request, BBCNativeClassResolver
 }
 
 void BBCNativePerform(NSDictionary *request, BBCNativeClassResolver resolver, BBCNativeCompletion completion) {
-    PerformWithMessageLoad(request,resolver,NO,0,completion);
+    BBCNativePerformWithScanTimeout(request,resolver,10,completion);
+}
+
+void BBCNativePerformWithScanTimeout(NSDictionary *request, BBCNativeClassResolver resolver, double scanTimeout, BBCNativeCompletion completion) {
+    if (!isfinite(scanTimeout) || scanTimeout <= 0 || scanTimeout > 10) { completion(Failure(@"native_invalid_scan_timeout",NO)); return; }
+    PerformWithMessageLoad(request,resolver,NO,0,scanTimeout,completion);
 }
 
 static BOOL Address(id value) {
@@ -437,6 +453,12 @@ static void PerformAdvanced(NSDictionary *request, BBCNativeClassResolver resolv
         NSArray *files = request[@"files"] ?: @[];
         NSString *text = request[@"text"];
         if (![files isKindOfClass:NSArray.class] || files.count > 8 || (text && !Text(text,64000)) || (!text && files.count == 0)) { completion(Failure(@"native_invalid_parts",NO)); return; }
+        NSString *effect = request[@"effect"];
+        Class messageClass = Resolve(@"IMMessage",resolver);
+        if (effect) {
+            if (!Text(effect,160) || !([effect hasPrefix:@"com.apple.messages.effect."] || [effect hasPrefix:@"com.apple.MobileSMS.expressivesend."])) { completion(Failure(@"native_invalid_effect",NO)); return; }
+            if (!InstanceHas(messageClass,@"setExpressiveSendStyleID:") || !InstanceHas(messageClass,@"expressiveSendStyleID")) { completion(Failure(@"native_effect_unavailable",NO)); return; }
+        }
         NSMutableAttributedString *body = [[NSMutableAttributedString alloc] initWithString:text ?: @""];
         NSMutableArray *transfers = [NSMutableArray array];
         NSString *partKey = NativeAttribute(@"IMMessagePartAttributeName",resolver), *transferKey = NativeAttribute(@"IMFileTransferGUIDAttributeName",resolver), *filenameKey = NativeAttribute(@"IMFilenameAttributeName",resolver);
@@ -455,9 +477,7 @@ static void PerformAdvanced(NSDictionary *request, BBCNativeClassResolver resolv
         id service = Invoke(Resolve(@"IMService",resolver),@"iMessageService",@[]);
         if (!service) { completion(Failure(@"native_imessage_unavailable",NO)); return; }
         id message = Invoke([Resolve(@"IMMessage",resolver) alloc],MessageInitializer,@[NSNull.null,NSNull.null,body,NSNull.null,transfers,@(0x100005),NSNull.null,NSUUID.UUID.UUIDString,NSNull.null,NSNull.null]);
-        NSString *effect = request[@"effect"];
         if (effect) {
-            if (!Text(effect,160) || !([effect hasPrefix:@"com.apple.messages.effect."] || [effect hasPrefix:@"com.apple.MobileSMS.expressivesend."])) { completion(Failure(@"native_invalid_effect",NO)); return; }
             Invoke(message,@"setExpressiveSendStyleID:",@[effect]);
             if (![Invoke(message,@"expressiveSendStyleID",@[]) isEqual:effect]) { completion(Failure(@"native_effect_unavailable",NO)); return; }
         }

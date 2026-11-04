@@ -25,6 +25,21 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(sqlite3_exec(db, setup, nil, nil, nil), SQLITE_OK)
         try body(MessagesDatabase(url: url), db!)
     }
+    func testReplyAliasResolvesExactMessageAndRejectsConflicts() throws {
+        func request(_ fields: [String: String]) throws -> NativeRequest {
+            var params: [String: Any] = fields
+            params["chat_guid"] = chat
+            params["text"] = "fixture reply"
+            params["read_guids"] = [guid]
+            return try JSONDecoder().decode(NativeRequest.self, from: JSONSerialization.data(withJSONObject: ["method": "reply", "params": params]))
+        }
+        XCTAssertEqual(try request(["reply_to": guid]).validated().message_guid, guid)
+        XCTAssertEqual(try request(["message_guid": guid]).validated().message_guid, guid)
+        XCTAssertEqual(try request(["reply_to": guid, "message_guid": guid]).validated().message_guid, guid)
+        XCTAssertThrowsError(try request(["reply_to": guid, "message_guid": UUID().uuidString]).validated())
+        XCTAssertThrowsError(try request(["reply_to": "latest"]).validated())
+    }
+
     func testNativeReplyConfirmationRequiresExactChatRootTextAndNewSentRow() throws {
         try fixture { database, db in
             XCTAssertEqual(sqlite3_exec(db,"ALTER TABLE message ADD COLUMN thread_originator_guid TEXT; ALTER TABLE message ADD COLUMN text TEXT; ALTER TABLE message ADD COLUMN is_sent INTEGER; ALTER TABLE message ADD COLUMN error INTEGER",nil,nil,nil),SQLITE_OK)

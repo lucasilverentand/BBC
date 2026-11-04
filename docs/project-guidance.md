@@ -23,3 +23,6 @@ This is a public product repository. Keep personal sending accounts, recipient i
 - [Groups, message changes, multipart sending and availability](native-features.md)
 - [Webhooks and search](events-and-search.md)
 - [Scheduled sends](scheduling.md)
+
+- [Account-free testing](testing.md)
+- [Reliability review and proposed follow-up tests](development/reliability-review.md)
