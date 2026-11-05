@@ -231,6 +231,9 @@ module BBCRelease
         'signer_team_id' => team, 'notary_submission_id' => notarization.fetch('id'),
         'notarized' => true, 'archive' => filename, 'created_at' => Time.now.utc.iso8601
       }
+      if environment['GITHUB_ACTIONS'] == 'true'
+        manifest['runner_image'] = {'os' => environment.fetch('ImageOS'), 'version' => environment.fetch('ImageVersion')}
+      end
       File.write(File.join(artifacts, 'manifest.json'), JSON.pretty_generate(manifest) + "\n")
       sums = [filename, 'manifest.json'].map { |name| "#{Digest::SHA256.file(File.join(artifacts, name)).hexdigest}  #{name}\n" }.join
       File.write(File.join(artifacts, 'SHA256SUMS'), sums)

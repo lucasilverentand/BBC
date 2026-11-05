@@ -112,12 +112,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("package", nargs="?", default=".")
     parser.add_argument("--min-tests", type=int, default=1)
+    parser.add_argument("--configuration", choices=["debug", "release"], default="debug")
     parser.add_argument("--log", help="append complete test output to this file")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     minimum = max(args.min_tests, 1)
     package = Path(args.package).resolve()
     build_options = ["--build-system", os.environ["BBC_SWIFT_BUILD_SYSTEM"]] if os.environ.get("BBC_SWIFT_BUILD_SYSTEM") else []
-    command = ["swift", "test", *build_options, "--package-path", str(package), "--disable-sandbox", "--jobs", "2"]
+    configuration_options = ["--configuration", args.configuration]
+    command = ["swift", "test", *build_options, *configuration_options, "--package-path", str(package), "--disable-sandbox", "--jobs", "2"]
     environment = os.environ.copy()
     environment["_BBC_TEST_DEADLINE"] = str(time.monotonic() + timeout_seconds(environment))
     cache = str(package / ".build" / "module-cache")
@@ -138,7 +140,7 @@ def main(argv=None):
         # Some Apple toolchains build XCTest bundles without running them. Resolve
         # only this build's output directory, excluding stale release/architecture bundles.
         output = build_output(
-            ["swift", "build", *build_options, "--package-path", str(package), "--show-bin-path"],
+            ["swift", "build", *build_options, *configuration_options, "--package-path", str(package), "--show-bin-path"],
             environment)
         bundles = sorted(Path(output.strip()).glob("*.xctest"))
         if not bundles:

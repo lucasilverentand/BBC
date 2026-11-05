@@ -8,6 +8,7 @@ require 'securerandom'
 require 'shellwords'
 require 'tmpdir'
 require_relative 'ci_release'
+require_relative 'ci_release_toolchain'
 
 module BBCReleaseSigning
   SECRET_NAMES = %w[BBC_DEVELOPER_ID_P12_BASE64 BBC_DEVELOPER_ID_P12_PASSWORD BBC_ASC_KEY_P8 BBC_ASC_KEY_ID BBC_ASC_ISSUER_ID].freeze
@@ -63,8 +64,7 @@ module BBCReleaseSigning
     tag = ENV.fetch('BBC_RELEASE_TAG')
     BBCReleaseCI.verify_source(root, tag, trusted_main, ENV.fetch('BBC_RELEASE_COMMIT'), checkout: true)
     raise BBCRelease::Failure, 'Release runner must be Apple Silicon' unless private_command('/usr/bin/uname', '-m').strip == 'arm64'
-    version = private_command('xcodebuild', '-version')[/\AXcode (\d+)\.(\d+)/, 0]
-    raise BBCRelease::Failure, 'Xcode 27.2 or later must be selected' unless version && (version.scan(/\d+/).map(&:to_i) <=> [27, 2]) >= 0
+    BBCReleaseToolchain.verify!
     SECRET_NAMES.each { |name| raise BBCRelease::Failure, "Required protected environment secret #{name} is missing" if ENV[name].to_s.empty? }
     File.umask(0o077)
     directory = Dir.mktmpdir('bbc-release-signing-', ENV.fetch('RUNNER_TEMP'))

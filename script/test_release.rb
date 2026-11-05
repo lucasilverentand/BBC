@@ -193,7 +193,7 @@ class ReleaseGuardTests < Minitest::Test
 
   def test_accepted_flow_checks_staple_gatekeeper_and_explicit_notary_keychain
     simulated_notarization('Accepted') do |calls|
-      BBCRelease.release(@root, {draft: true}, {'BBC_RELEASE_SIGNING_IDENTITY' => 'fixture', 'BBC_NOTARY_PROFILE' => 'fixture', 'BBC_NOTARY_KEYCHAIN' => '/fixture/private.keychain-db'})
+      BBCRelease.release(@root, {draft: true}, {'BBC_RELEASE_SIGNING_IDENTITY' => 'fixture', 'BBC_NOTARY_PROFILE' => 'fixture', 'BBC_NOTARY_KEYCHAIN' => '/fixture/private.keychain-db', 'GITHUB_ACTIONS' => 'true', 'ImageOS' => 'macos27', 'ImageVersion' => 'fixture-image'})
       notary_calls = calls.select { |command| command[0, 2] == ['xcrun', 'notarytool'] }
       assert_equal 2, notary_calls.size
       assert notary_calls.all? { |command| command.each_cons(2).include?(['--keychain', '/fixture/private.keychain-db']) }
@@ -207,6 +207,7 @@ class ReleaseGuardTests < Minitest::Test
       manifest = JSON.parse(File.read(File.join(directory, 'manifest.json')))
       assert_equal true, manifest.fetch('notarized')
       assert_equal 'a' * 40, manifest.fetch('commit')
+      assert_equal({'os' => 'macos27', 'version' => 'fixture-image'}, manifest.fetch('runner_image'))
       assert_equal 2, File.readlines(File.join(directory, 'SHA256SUMS')).length
     end
   end

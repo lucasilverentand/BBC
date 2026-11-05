@@ -34,7 +34,7 @@ jobs:
   sign:
     needs: verify
     if: github.repository == 'lucasilverentand/BBC' && github.ref == 'refs/heads/main'
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     environment: release
     permissions:
@@ -56,13 +56,12 @@ jobs:
         run: |
           /usr/bin/ruby script/ci_release.rb verify
           mkdir -m 700 "$RUNNER_TEMP/bbc-release-tools"
-          cp script/version.rb script/release.rb script/ci_release.rb script/ci_release_sign.rb "$RUNNER_TEMP/bbc-release-tools/"
+          cp script/version.rb script/release.rb script/ci_release.rb script/ci_release_sign.rb script/ci_release_toolchain.rb "$RUNNER_TEMP/bbc-release-tools/"
           git checkout --detach "$BBC_RELEASE_COMMIT"
       - name: Require the supported release toolchain
         run: |
           test "$(uname -m)" = arm64 || { echo 'An Apple Silicon runner is required'; exit 1; }
-          test -d "$DEVELOPER_DIR" || { echo 'Xcode 27.2 is unavailable on this runner; release stopped'; exit 1; }
-          xcodebuild -version
+          /usr/bin/ruby "$RUNNER_TEMP/bbc-release-tools/ci_release_toolchain.rb"
       - name: Recheck the exact release checkout before credential access
         run: /usr/bin/ruby "$RUNNER_TEMP/bbc-release-tools/ci_release.rb" checkout
       - name: Sign, notarize, staple and assess

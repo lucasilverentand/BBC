@@ -67,6 +67,16 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(stream.call_count, 1)
             build.assert_not_called()
 
+    def test_release_fallback_resolves_only_the_release_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "ReleasePackageTests.xctest"
+            bundle.mkdir()
+            with patch.object(runner.sys, "platform", "darwin"), patch.object(runner, "build_output", return_value=directory) as build, patch.object(runner, "stream", side_effect=["Build complete!", "Executed 5 tests"]) as stream:
+                runner.main(["--configuration", "release", "--min-tests", "5"])
+                for command in [stream.call_args_list[0].args[0], build.call_args.args[0]]:
+                    self.assertEqual(command[command.index("--configuration") + 1], "release")
+                self.assertEqual(stream.call_args_list[1].args[0], ["xcrun", "xctest", str(bundle)])
+
 
 class StreamTests(unittest.TestCase):
     def run_stream(self, code, timeout=None):

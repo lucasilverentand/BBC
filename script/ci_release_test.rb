@@ -16,6 +16,18 @@ class CIReleaseTests < Minitest::Test
     FileUtils.remove_entry(@root) if File.exist?(@root)
   end
 
+  def test_toolchain_requires_reviewed_build_and_resolved_installation
+    environment = {'GITHUB_ACTIONS' => 'true', 'ImageOS' => 'macos27', 'ImageVersion' => '20261026.0314.1'}
+    candidate = '/Applications/Xcode_27.2_Release_Candidate.app/Contents/Developer'
+    final = '/Applications/Xcode_27.2.app/Contents/Developer'
+    assert_equal '27B48', BBCReleaseToolchain.validate!("Xcode 27.2\nBuild version 27B48", candidate, environment).fetch('xcode_build')
+    assert_equal '27B52', BBCReleaseToolchain.validate!("Xcode 27.2\nBuild version 27B52", final, environment).fetch('xcode_build')
+    assert_raises(BBCRelease::Failure) { BBCReleaseToolchain.validate!("Xcode 27.2\nBuild version 27B99", final, environment) }
+    assert_raises(BBCRelease::Failure) { BBCReleaseToolchain.validate!("Xcode 27.2\nBuild version 27B48", final, environment) }
+    assert_raises(BBCRelease::Failure) { BBCReleaseToolchain.validate!("Xcode 27.2\nBuild version 27B48", '/tmp/Xcode.app/Contents/Developer', environment) }
+    assert_raises(BBCRelease::Failure) { BBCReleaseToolchain.validate!("Xcode 27.2\nBuild version 27B48", candidate, {'GITHUB_ACTIONS' => 'true'}) }
+  end
+
   def artifact_fixture
     archive = 'BlueBubbleClub-0.1.0-macos-arm64.zip'
     app = File.join(@root, 'Blue Bubble Club.app')
