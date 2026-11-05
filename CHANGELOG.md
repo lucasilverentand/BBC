@@ -8,6 +8,7 @@ The first downloadable release is being prepared. No notarized binary has been p
 - Direct-chat threaded replies and Tapbacks, typing, read-state observations, media, webhooks, search and scheduled sends.
 - Native group operations, message changes and multipart messages where the connected host supports them.
 - Stronger reply-target loading, exact acknowledged-message confirmation and consistent thread-root metadata.
+- An optional startup setting that opens Messages hidden and hides it after native bridge relaunches.
 - Synthetic worker, bridge, receipt and HTTP regression suites that do not require an iMessage account.
 - A separate optimized, Developer ID-signed and notarized packaging path with source-commit metadata and checksums.
 

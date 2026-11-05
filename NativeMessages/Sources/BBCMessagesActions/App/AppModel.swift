@@ -53,7 +53,24 @@ import CoreServices
             let port = UserDefaults.standard.object(forKey: "apiPort") as? Int ?? 7861
             start(port: port)
         }
-        if UserDefaults.standard.bool(forKey:"startNativeBridgeOnLaunch") { startNativeBridge() }
+        switch NativeMessagesStartup.launchPlan(openHidden: NativeMessagesStartup.hiddenLaunchEnabled,
+                                                connectBridge: UserDefaults.standard.bool(forKey:"startNativeBridgeOnLaunch"),
+                                                fullAccess: mode == .full) {
+        case .connectBridge: startNativeBridge(openHiddenOnFailure: NativeMessagesStartup.hiddenLaunchEnabled)
+        case .openHidden: openMessagesHidden()
+        case .none: break
+        }
+    }
+    /// Open (or reuse) this user's Messages process and hide it. Launching is
+    /// not a capability fallback: native actions still require the bridge.
+    func openMessagesHidden() {
+        Task {
+            do {
+                let pid = try await NativeMessagesStartup.ensureRunning()
+                await NativeMessagesStartup.hide(pid: pid)
+                log.record("Messages opened hidden.")
+            } catch { self.error = "Could not open Messages. Sign into Messages in this macOS account." }
+        }
     }
     func refreshLoginItem() {
         startAtLogin = LoginItem.enabled; loginNeedsApproval = LoginItem.needsApproval
@@ -80,13 +97,18 @@ import CoreServices
             else { nativeRequirements = "Host requirements pass. Start the native bridge to connect Messages." }
         }
     }
-    func startNativeBridge() {
+    func startNativeBridge(openHiddenOnFailure: Bool = false) {
         guard mode == .full, !nativeStarting else { return }; nativeStarting = true
         log.record("Connecting native messaging.")
         Task {
             defer { nativeStarting = false; refreshNativeBridge() }
             do { try await nativeHost.start() }
-            catch { self.error = "Could not start the native bridge. Check host setup and whether Messages can quit. No UI fallback was used." }
+            catch {
+                self.error = "Could not start the native bridge. Check host setup and whether Messages can quit. No UI fallback was used."
+                // Keep Messages available for observation and ordinary sends;
+                // the bridge itself is not retried.
+                if openHiddenOnFailure { openMessagesHidden() }
+            }
         }
     }
     func stopNativeBridge() { log.record("Disconnecting native messaging."); nativeHost.stop(); nativeConnected = false; refreshNativeBridge() }
