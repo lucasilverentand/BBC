@@ -97,6 +97,10 @@ Query `/v1/status` with a full-access key. `native_bridge_ready: true` and `nati
 
 **Disconnect** disconnects BBC and clears its owned typing leases; Messages stays open. In **Server → Setup**, enable **Connect automatically at launch** only after validating the connection. App login startup and API startup have separate toggles.
 
+### Unattended startup
+
+For an always-on host, enable **Start at login**, **Start API at launch** and **Open Messages hidden at launch** in **Settings → Startup**, plus **Connect automatically at launch** in **Server → Setup** once the bridge is validated. With **Open Messages hidden at launch**, BBC opens Messages in the background when it launches, or hides an existing Messages process. It also hides Messages after relaunching it for the bridge. Hiding uses the app-level hide API; BBC sends no clicks or keystrokes. Choose Messages from the Dock or app switcher to show it again. If the bridge cannot connect at launch, BBC still opens Messages hidden for history and ordinary sends and does not retry the bridge. Startup only runs after this macOS user logs in.
+
 ## Troubleshooting
 
 | Symptom | Check |

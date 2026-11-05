@@ -38,6 +38,38 @@ import Darwin
             return owned
         }
     }
+    /// Operator setting: open Messages hidden when BBC launches and keep the
+    /// windows of any Messages process BBC starts out of the way.
+    static let hiddenLaunchKey = "startMessagesHiddenOnLaunch"
+    static var hiddenLaunchEnabled: Bool { UserDefaults.standard.bool(forKey: hiddenLaunchKey) }
+    enum LaunchPlan: Equatable { case none, openHidden, connectBridge }
+    /// The bridge relaunches Messages itself, so opening it first would only
+    /// start a process that is immediately asked to quit.
+    static func launchPlan(openHidden: Bool, connectBridge: Bool, fullAccess: Bool) -> LaunchPlan {
+        if connectBridge && fullAccess { return .connectBridge }
+        return openHidden ? .openHidden : .none
+    }
+    /// Hide the given Messages process with the app-level hide API. This never
+    /// sends input events, clicks or keystrokes. A second pass catches windows
+    /// restored after launch finishes, unless the operator brought Messages
+    /// forward in the meantime.
+    static func hide(pid: pid_t) async {
+        var app: NSRunningApplication?
+        let lookupDeadline = Date().addingTimeInterval(5)
+        repeat {
+            app = NSRunningApplication(processIdentifier: pid)
+            if app == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        } while app == nil && Date() < lookupDeadline
+        guard let app, app.bundleIdentifier == "com.apple.MobileSMS", self.process(app)?.uid == getuid() else { return }
+        let deadline = Date().addingTimeInterval(5)
+        while !app.isFinishedLaunching, !app.isTerminated, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard !app.isTerminated else { return }
+        app.hide()
+        try? await Task.sleep(for: .milliseconds(1500))
+        if !app.isTerminated, !app.isHidden, !app.isActive { app.hide() }
+    }
     static func ensureRunning(effectiveUID: UInt32, lookup: () -> Process?, launch: () async throws -> Process) async throws -> pid_t {
         guard effectiveUID != 0 && effectiveUID == getuid() else { throw ActionFailure.invalid }
         let app: Process
