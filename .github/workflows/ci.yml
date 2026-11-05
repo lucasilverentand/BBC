@@ -10,20 +10,59 @@ jobs:
     runs-on: ubuntu-24.04
     container: swift:6.0.3-jammy
     timeout-minutes: 10
+    env:
+      BBC_TEST_TIMEOUT_SECONDS: 480
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install fixture and SQLite dependencies
         run: apt-get update && apt-get install -y --no-install-recommends python3 libsqlite3-dev
       - run: python3 -m unittest discover -s script -p 'test_*.py'
-      - run: python3 script/test_swift.py .
+      - run: python3 script/test_swift.py . --min-tests 11 --log build/test-logs/linux.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: bbc-linux-test-logs
+          path: build/test-logs/
+          if-no-files-found: ignore
+          retention-days: 3
   transport:
     runs-on: macos-26
     timeout-minutes: 10
+    env:
+      BBC_TEST_TIMEOUT_SECONDS: 480
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: python3 -m unittest discover -s script -p 'test_*.py'
-      - run: swift build
-      - run: python3 script/test_swift.py .
+      - run: /usr/bin/ruby script/test_release.rb
+      - run: python3 script/test_swift.py . --min-tests 25 --log build/test-logs/sdk.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: bbc-transport-test-logs
+          path: build/test-logs/
+          if-no-files-found: ignore
+          retention-days: 3
+  hosted-native-compatibility:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      BBC_TEST_TIMEOUT_SECONDS: 600
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate the hosted toolchain without signing credentials
+        run: bash script/validate_hosted_toolchain.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: bbc-hosted-toolchain-evidence
+          path: |
+            build/toolchain-evidence/
+            build/test-logs/
+          if-no-files-found: error
+          retention-days: 3
   native:
     runs-on: xcode-27
     env:
@@ -31,7 +70,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: /usr/bin/ruby script/test_release.rb
       - run: bash script/prepare_icon.sh
+      - name: Export accepted toolchain icon for comparison
+        run: |
+          mkdir -p build/icon-reference
+          sips -s format png build/AppIcon/AppIcon.icns --out build/icon-reference/AppIcon.png
+          cp build/AppIcon/Assets.car build/AppIcon/AppIcon.icns build/AppIcon/Info.plist build/icon-reference/
+          find Assets/AppIcon.icon -type f -exec shasum -a 256 {} \; > build/icon-reference/icon-source-checksums.txt
       - run: bash script/prepare_bridge.sh
       - name: Verify Messages bridge ABI
         run: |
@@ -39,14 +85,22 @@ jobs:
             xcrun lipo -verify_arch "$arch" build/NativeBridge/BBCMessagesBridge.dylib
           done
           test "$(xcrun vtool -show-build build/NativeBridge/BBCMessagesBridge.dylib | awk '$1 == "platform" {print $2}' | sort -u)" = MACCATALYST
-      - run: python3 script/test_swift.py NativeBridge
+      - run: python3 script/test_swift.py NativeBridge --min-tests 34 --log build/test-logs/bridge.log
       - run: bash script/prepare_native.sh
-      - run: python3 script/test_swift.py NativeMessages
+      - run: python3 script/test_swift.py NativeMessages --min-tests 169 --log build/test-logs/app.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: bbc-native-test-logs
+          path: build/test-logs/
+          if-no-files-found: ignore
+          retention-days: 3
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bbc-native-validation
           path: |
             NativeMessages/.build/debug/BlueBubbleClub
             build/NativeBridge/BBCMessagesBridge.dylib
+            build/icon-reference/
           if-no-files-found: error
           retention-days: 1

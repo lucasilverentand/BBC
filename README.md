@@ -37,7 +37,7 @@ cd BBC
 ./script/build_and_run.sh
 ```
 
-Follow the [setup guide](docs/setup.md) for permissions, modes and API access. For this sending example, choose Full API mode and a full-access key, then select **Start API**.
+Follow the [setup guide](docs/setup.md) for permissions and API access. For this sending example, create a key with **Full access**, then select **Start API**.
 
 ```sh
 curl http://127.0.0.1:7861/v1/messages \
@@ -51,7 +51,9 @@ Use a new UUID for each operation; reuse it when retrying the same request.
 
 [Setup guide](docs/setup.md) · [API guide](docs/api.md) · [Protocol](docs/protocol.md) · [Swift SDK](Sources/BBCClient)
 
-[Testing without iMessage](docs/testing.md)
+[Testing without iMessage](docs/testing.md) · [Marketing website](website/)
+
+[Release process](docs/releases.md) · [Changelog](CHANGELOG.md)
 
 [MIT license](LICENSE) · [Third-party notices](NOTICE)
 

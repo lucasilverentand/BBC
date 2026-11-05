@@ -26,3 +26,5 @@ This is a public product repository. Keep personal sending accounts, recipient i
 
 - [Account-free testing](testing.md)
 - [Reliability review and proposed follow-up tests](development/reliability-review.md)
+- [Endorsed account-free test suite plan](development/test-suite-plan.md)
+- [Downloadable app release process](releases.md)

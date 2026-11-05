@@ -15,14 +15,9 @@ import SQLite3
             calls[method,default:0] += 1
             return .object(["method":.string(method),"params":request.object?["params"] ?? .null])
         }
-        let port = UInt16.random(in:20000...45000)
-        let server = try LocalAPIServer(host:"127.0.0.1",port:port,router:router)
-        defer { server.stop() }
-        let ready = await withCheckedContinuation { continuation in
-            let once = ExpandedReadyOnce(continuation); server.start { once.finish($0) }
-        }
-        XCTAssertTrue(ready)
-        let client = BBCHTTPClient(baseURL:URL(string:"http://127.0.0.1:\(port)")!,apiKey:key)
+        let (server, port, base) = try await startFixtureServer(router: router)
+        defer { server.stopAndDrain() }
+        let client = BBCHTTPClient(baseURL:base,apiKey:key)
         let params: BBCJSONValue = .object(["fixture":.string("exact original fields")])
         for method in ["groups.create","groups.add","groups.remove","groups.name","groups.photo","groups.leave","messages.edit","messages.unsend","messages.multipart"] {
             let payload: BBCJSONValue = .object(["method":.string(method),"params":params])
@@ -57,14 +52,8 @@ import SQLite3
         let schedules = try LocalScheduleService(directory:directory.appendingPathComponent("schedules"),
             isKeyActive:{ id in keys.keys.contains { $0.id == id } },execute:{ _ in XCTFail("No scheduler was started"); return .null })
         let router = APIRouter(keys:keys,webhooks:webhooks,schedules:schedules) { _ in XCTFail("Service routes remain in the app"); return .null }
-        let port = UInt16.random(in:20000...45000)
-        let server = try LocalAPIServer(host:"127.0.0.1",port:port,router:router)
-        defer { server.stop() }
-        let ready = await withCheckedContinuation { continuation in
-            let once = ExpandedReadyOnce(continuation); server.start { once.finish($0) }
-        }
-        XCTAssertTrue(ready)
-        let base = URL(string:"http://127.0.0.1:\(port)")!
+        let (server, port, base) = try await startFixtureServer(router: router)
+        defer { server.stopAndDrain() }
         let client = BBCHTTPClient(baseURL:base,apiKey:secret), other = BBCHTTPClient(baseURL:base,apiKey:otherSecret)
         let id = UUID()
         let payload: BBCJSONValue = .object(["method":.string("schedule.create"),"params":.object([
@@ -110,14 +99,4 @@ import SQLite3
 
 private extension BBCJSONValue {
     var fixtureArray: [BBCJSONValue]? { if case .array(let values) = self { values } else { nil } }
-}
-
-private final class ExpandedReadyOnce: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Bool,Never>?
-    init(_ continuation: CheckedContinuation<Bool,Never>) { self.continuation = continuation }
-    func finish(_ value: Bool) {
-        lock.lock(); let current = continuation; continuation = nil; lock.unlock()
-        current?.resume(returning:value)
-    }
 }

@@ -1,0 +1,8 @@
+# Release trust boundary: review workflow and signing changes before merging.
+/.github/workflows/ @lucasilverentand
+/.github/CODEOWNERS @lucasilverentand
+/script/release.* @lucasilverentand
+/script/ci_release* @lucasilverentand
+/script/version.rb @lucasilverentand
+/VERSION @lucasilverentand
+/Config/BBCMessagesActions.entitlements @lucasilverentand

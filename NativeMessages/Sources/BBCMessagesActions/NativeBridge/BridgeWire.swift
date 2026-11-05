@@ -51,7 +51,7 @@ enum BridgeWire {
 
 /// A fresh authenticated connection per call, with no reconnect or replay.
 enum NativeBridgeClient {
-    static func request(_ request: BBCJSONValue, endpoint: BridgeWire.Endpoint? = nil) throws -> BBCJSONValue {
+    static func request(_ request: BBCJSONValue, endpoint: BridgeWire.Endpoint? = nil, timeout seconds: Int = 25) throws -> BBCJSONValue {
         var dispatched = false
         do {
         let selected = try endpoint ?? BridgeWire.Endpoint.load()
@@ -60,7 +60,7 @@ enum NativeBridgeClient {
         defer { close(fd) }
         var noSignal: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout.size(ofValue: noSignal)))
-        var timeout = timeval(tv_sec: 25, tv_usec: 0)
+        var timeout = timeval(tv_sec: seconds, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var address = sockaddr_in()
@@ -101,7 +101,7 @@ enum NativeBridgeClient {
         dispatched = true
         try send(.object(["kind":.string("call"),"id":.string(id),"request":request]))
         let result = try receive()
-        guard result.object?["id"]?.string == id, let value = result.object?["result"] else { throw ActionFailure.uncertain }
+        guard result.object?["kind"]?.string == "result", result.object?["id"]?.string == id, let value = result.object?["result"] else { throw ActionFailure.uncertain }
         return value
         } catch { throw dispatched ? ActionFailure.uncertain : ActionFailure.unavailable }
     }

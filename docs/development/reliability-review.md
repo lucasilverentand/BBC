@@ -11,6 +11,13 @@ This review covers BBC's synthetic test coverage and failure handling on 2026-11
 - Reply validation accepts the documented `reply_to` alias and rejects conflicting native message identities.
 - Local typing validation happens before an operation intent is reserved. Invalid identities do not create a misleading uncertain receipt.
 - If receipt storage fails after dispatch, the API returns the observed result rather than a misleading rejected-request response. A fault-injection test moves the temporary store during dispatch, restores it, and verifies that the surviving intent prevents replay.
+- Sol and Opus endorsed a focused [implementation plan](test-suite-plan.md). Sonnet agents at low effort implemented its packages, with moderator integration and final suite verification.
+- Native worker request/result seams now use explicit database, bridge, lock and confirmation dependencies. Synthetic reply and Tapback tests require exact database confirmation, reject wrong identities, and count zero or one forwarded command without redispatch.
+- The legacy RPC worker uses injected startup, permission and script actions. Proven pre-script failures are non-dispatched; post-entry failures remain uncertain. Fixtures never execute AppleScript.
+- Broker deadlines and limits are injectable with unchanged production defaults. Tests cover pending UUID ownership, duplicate status IDs, actual late results, duplicate results, helper replacement rejection, capacity, unauthenticated idle expiry, malformed frames and reply kinds. Shutdown checks endpoint ownership before removal.
+- Router tests cover concurrent identical requests, conflicts, key isolation, corrupt/truncated records, intent-write failures, file permissions and replay after reopening both stores and routers. Typing tests follow accepted requests through completion and cancellation.
+- SDK tests cover all current routes and binary uploads, redirects and disconnects. HTTP peers publish ports atomically and capture bounded startup diagnostics; teardown is confirmed before files are deleted. Native listeners use ephemeral ports and fixture waits are bounded.
+- The runner enforces an overall deadline and minimum test counts, rejects nonzero exits regardless of positive output, and terminates owned process groups. Partial execution below the floor fails without re-executing the suite.
 
 ## Proposed follow-up work
 
@@ -20,17 +27,15 @@ These are remaining engineering proposals, not accepted runtime operations or cl
 
 The API router writes operation files atomically, but does not explicitly flush the file and parent directory. Define the crash/power-loss durability guarantee, then implement and test a shared durable store for mutation intents and receipts. Test failed writes before dispatch, after dispatch, and after rename. Keep reconciliation mandatory when the observed outcome cannot be established.
 
-The legacy send worker's outer catch labels even pre-dispatch failures uncertain. Track the dispatch boundary explicitly, inject its store/lock paths, and test invalid input, lock contention and unavailable permissions as non-dispatched. Test failures after the send call as uncertain. Never infer safe retry merely from a missing database row.
-
 ### Worker integration without a configured host
 
-Introduce explicit environment dependencies for database URL, bridge endpoint, locks, handoff directory and native startup. Defaults retain normal app behavior; fixtures supply temporary paths and a synthetic bridge. Do not rely on overriding HOME. Exercise a single worker invocation against a fake peer and fixture SQLite database: acknowledged native GUID plus exact matching row, acknowledged GUID without a row, bridge unavailable, and disconnect after dispatch. Assert exactly one forwarded command in each dispatch case.
+Reply and Tapback orchestration now have fixture coverage, and legacy text sends have injected native actions. Extend these seams to advanced actions, media staging and typing sessions when adding behavior there. Preserve exact native/database identities and the rule that confirmation polling never dispatches again. Do not rely on overriding HOME.
 
 Extract reusable request validation and receipt classification into a Foundation-only target when that enables actual Linux regression coverage. The UI and private Objective-C bridge remain Mac-only.
 
 ### Bridge lifecycle
 
-Make broker deadlines injectable for tests. Cover a silent helper, late results, duplicate request IDs, a second helper, pending-call capacity and idle authenticated workers. Add reply-kind validation to the client. Test that each rejection is non-dispatched and each timed-out dispatch remains uncertain without replay.
+Broker timeout, ownership, capacity and reply-kind cases now have synthetic regression tests. Authenticated workers that never call remain a separate lifecycle policy decision; the current change preserves production idle behavior.
 
 EmbeddedSession's typing lease table is outside the current NativeBridge SwiftPM target. Extract its state transitions behind an injected native action and test replacement leases, stale stop requests, deadline expiry and disconnect cleanup. Starting lease B followed by stopping A must leave B active.
 

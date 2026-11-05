@@ -10,3 +10,6 @@ build/
 __pycache__/
 dist/
 Config/LocalSigning.env
+.release-credentials/
+*.p12
+AuthKey_*.p8

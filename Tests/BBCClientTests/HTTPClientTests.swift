@@ -4,59 +4,113 @@ import XCTest
 
 /// A real HTTP peer on an ephemeral loopback port. It never invokes the Mac app.
 final class HTTPClientTests: XCTestCase, @unchecked Sendable {
-    private func withPeer(status: Int = 200, response: String = "{\"ok\":true}", redirect: Bool = false,
+    private struct PeerFailure: Error, CustomStringConvertible { let description: String }
+
+    private static let peerSource = """
+    import base64, http.server, json, os, pathlib, socket, sys, traceback
+    root = pathlib.Path(sys.argv[1])
+    config = json.loads((root / 'config.json').read_text())
+    response = base64.b64decode(config['response_b64'])
+    class Peer(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_GET(self): self.respond()
+        def do_POST(self): self.respond()
+        def respond(self):
+            body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
+            with (root / 'calls').open('a') as calls:
+                calls.write(json.dumps({'path': self.path, 'method': self.command,
+                                        'headers': {name.lower(): value for name, value in self.headers.items()},
+                                        'body_b64': base64.b64encode(body).decode()}) + '\\n')
+            if config['disconnect']:
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            self.send_response(config['status'])
+            if config['redirect']:
+                self.send_header('Location', 'http://127.0.0.1:%d/redirected' % self.server.server_port)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(response)))
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(response)
+    try:
+        server = http.server.HTTPServer(('127.0.0.1', 0), Peer)
+        (root / 'port.tmp').write_text(str(server.server_port))
+        os.replace(root / 'port.tmp', root / 'port')
+        server.serve_forever()
+    except BaseException:
+        traceback.print_exc()
+        sys.exit(1)
+    """
+
+    private func stop(_ process: Process) async throws {
+        guard process.isRunning else { return }
+        process.terminate()
+        for _ in 0..<500 where process.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            for _ in 0..<500 where process.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        if process.isRunning { throw PeerFailure(description: "Fixture peer did not stop") }
+    }
+
+    private func withPeer(status: Int = 200, response: Data = Data("{\"ok\":true}".utf8), redirect: Bool = false,
+                          disconnect: Bool = false,
                           run: (BBCHTTPClient, () throws -> [[String: BBCJSONValue]]) async throws -> Void) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
         let script = directory.appendingPathComponent("peer.py")
         let portFile = directory.appendingPathComponent("port")
         let callsFile = directory.appendingPathComponent("calls")
-        try Data(response.utf8).write(to: directory.appendingPathComponent("response"))
-        try Data("""
-        import http.server, json, pathlib, sys
-        root = pathlib.Path(sys.argv[1])
-        class Peer(http.server.BaseHTTPRequestHandler):
-            def log_message(self, *args): pass
-            def do_GET(self): self.respond()
-            def do_POST(self): self.respond()
-            def respond(self):
-                body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
-                with (root / 'calls').open('a') as calls:
-                    calls.write(json.dumps({'path': self.path, 'method': self.command,
-                                            'headers': dict(self.headers), 'body': body.decode()}) + '\\n')
-                self.send_response(int(sys.argv[2]))
-                if sys.argv[3] == 'true':
-                    self.send_header('Location', 'http://127.0.0.1:%d/redirected' % self.server.server_port)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                self.wfile.write((root / 'response').read_bytes())
-        server = http.server.HTTPServer(('127.0.0.1', 0), Peer)
-        (root / 'port').write_text(str(server.server_port))
-        server.serve_forever()
-        """.utf8).write(to: script)
+        let diagnosticsFile = directory.appendingPathComponent("diagnostics")
+        try Data(Self.peerSource.utf8).write(to: script)
+        try JSONSerialization.data(withJSONObject: [
+            "response_b64": response.base64EncodedString(), "status": status,
+            "redirect": redirect, "disconnect": disconnect,
+        ]).write(to: directory.appendingPathComponent("config.json"))
+        XCTAssertTrue(FileManager.default.createFile(atPath: diagnosticsFile.path, contents: nil))
+        let diagnostics = try FileHandle(forWritingTo: diagnosticsFile)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", script.path, directory.path, String(status), String(redirect)]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try process.run()
+        process.arguments = ["python3", script.path, directory.path]
+        process.standardOutput = diagnostics
+        process.standardError = diagnostics
+        func peerDiagnostics() -> String {
+            let text = (try? String(contentsOf: diagnosticsFile, encoding: .utf8)) ?? ""
+            return String(text.suffix(2000))
+        }
         // Foundation reaps Process children. Blocking waitUntilExit here can deadlock
-        // an async XCTest executor after a child has already exited.
-        defer { if process.isRunning { process.terminate() } }
-        let deadline = Date().addingTimeInterval(5)
-        while !FileManager.default.fileExists(atPath: portFile.path), process.isRunning, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let port = try String(contentsOf: portFile, encoding: .utf8)
-        let client = BBCHTTPClient(baseURL: URL(string: "http://127.0.0.1:\(port)")!, apiKey: "fixture-only-key")
-        try await run(client) {
-            guard FileManager.default.fileExists(atPath: callsFile.path) else { return [] }
-            return try String(contentsOf: callsFile, encoding: .utf8).split(separator: "\n").map {
-                try JSONDecoder().decode([String: BBCJSONValue].self, from: Data($0.utf8))
+        // an async XCTest executor, so teardown polls isRunning with a bounded deadline.
+        var failure: Error?
+        do {
+            try process.run()
+            let deadline = Date().addingTimeInterval(5)
+            while !FileManager.default.fileExists(atPath: portFile.path), process.isRunning, Date() < deadline {
+                try await Task.sleep(for: .milliseconds(10))
             }
+            guard let port = try? String(contentsOf: portFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+                  let portNumber = UInt16(port), portNumber != 0, let baseURL = URL(string: "http://127.0.0.1:\(portNumber)") else {
+                throw PeerFailure(description: "Fixture peer did not publish a port within 5 seconds: \(peerDiagnostics())")
+            }
+            let client = BBCHTTPClient(baseURL: baseURL, apiKey: "fixture-only-key")
+            try await run(client) {
+                guard FileManager.default.fileExists(atPath: callsFile.path) else { return [] }
+                return try String(contentsOf: callsFile, encoding: .utf8).split(separator: "\n").map {
+                    try JSONDecoder().decode([String: BBCJSONValue].self, from: Data($0.utf8))
+                }
+            }
+        } catch { failure = error }
+        try? diagnostics.close()
+        do { try await stop(process) } catch {
+            // Keep files while a peer may still be alive.
+            throw failure ?? error
         }
+        try? FileManager.default.removeItem(at: directory)
+        if let failure { throw failure }
+    }
+
+    private func body(_ request: [String: BBCJSONValue]) throws -> Data {
+        try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(request["body_b64"]?.string)))
     }
 
     func testStatusUsesAuthenticatedGETWithoutBodyOrOperationID() async throws {
@@ -66,9 +120,9 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
             let request = try XCTUnwrap(calls().first)
             XCTAssertEqual(request["path"], .string("/v1/status"))
             XCTAssertEqual(request["method"], .string("GET"))
-            XCTAssertEqual(request["body"], .string(""))
-            XCTAssertEqual(request["headers"]?.object?["Authorization"], .string("Bearer fixture-only-key"))
-            XCTAssertNil(request["headers"]?.object?["Idempotency-Key"])
+            XCTAssertEqual(try body(request), Data())
+            XCTAssertEqual(request["headers"]?.object?["authorization"], .string("Bearer fixture-only-key"))
+            XCTAssertNil(request["headers"]?.object?["idempotency-key"])
         }
     }
 
@@ -81,8 +135,8 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
             XCTAssertEqual(requests.count, 1)
             XCTAssertEqual(request["path"], .string("/v1/replies"))
             XCTAssertEqual(request["method"], .string("POST"))
-            XCTAssertEqual(request["headers"]?.object?["Idempotency-Key"], .string(id.uuidString))
-            XCTAssertEqual(try JSONDecoder().decode(BBCJSONValue.self, from: Data(try XCTUnwrap(request["body"]?.string).utf8)), params)
+            XCTAssertEqual(request["headers"]?.object?["idempotency-key"], .string(id.uuidString))
+            XCTAssertEqual(try JSONDecoder().decode(BBCJSONValue.self, from: body(request)), params)
         }
     }
 
@@ -106,13 +160,13 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
                 _ = try await client.request(.object(["method": .string(method)]))
                 let request = try XCTUnwrap(calls().last)
                 XCTAssertEqual(request["path"], .string("/v1/" + path))
-                XCTAssertNil(request["headers"]?.object?["Idempotency-Key"])
+                XCTAssertNil(request["headers"]?.object?["idempotency-key"])
             }
         }
     }
 
     func testFailureDoesNotRetryOrExposeResponseBody() async throws {
-        try await withPeer(status: 503, response: "fixture-private-diagnostic") { client, calls in
+        try await withPeer(status: 503, response: Data("fixture-private-diagnostic".utf8)) { client, calls in
             do {
                 _ = try await client.request(.object(["method": .string("send")]), operationID: UUID())
                 XCTFail("Expected failure")
@@ -135,7 +189,7 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
     }
 
     func testMalformedResponseDoesNotRetry() async throws {
-        try await withPeer(response: "not JSON") { client, calls in
+        try await withPeer(response: Data("not JSON".utf8)) { client, calls in
             do {
                 _ = try await client.request(.object(["method": .string("send")]), operationID: UUID())
                 XCTFail("Expected decoding failure")
@@ -145,7 +199,7 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
     }
 
     func testOversizedResponseIsRejectedWithoutRetry() async throws {
-        try await withPeer(response: String(repeating: "x", count: 2_000_001)) { client, calls in
+        try await withPeer(response: Data(repeating: 0x78, count: 2_000_001)) { client, calls in
             do {
                 _ = try await client.request(.object(["method": .string("send")]), operationID: UUID())
                 XCTFail("Expected response bound")
@@ -157,14 +211,15 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
     }
 
     func testUploadSendsExactBytesAndFilename() async throws {
-        try await withPeer(status: 201, response: "{\"media_id\":\"fixture-media\"}") { client, calls in
-            let result = try await client.uploadMedia(Data("fixture bytes".utf8), filename: "fixture.png")
+        try await withPeer(status: 201, response: Data("{\"media_id\":\"fixture-media\"}".utf8)) { client, calls in
+            let bytes = Data([0x00, 0xFF, 0x0A, 0x0D, 0x80, 0x7F, 0x00, 0xC3, 0x28])
+            let result = try await client.uploadMedia(bytes, filename: "fixture.png")
             XCTAssertEqual(result.object?["media_id"], .string("fixture-media"))
             let request = try XCTUnwrap(calls().first)
             XCTAssertEqual(request["path"], .string("/v1/media/upload"))
-            XCTAssertEqual(request["body"], .string("fixture bytes"))
-            XCTAssertEqual(request["headers"]?.object?["X-BBC-Filename"], .string("fixture.png"))
-            XCTAssertEqual(request["headers"]?.object?["Content-Type"], .string("application/octet-stream"))
+            XCTAssertEqual(try body(request), bytes)
+            XCTAssertEqual(request["headers"]?.object?["x-bbc-filename"], .string("fixture.png"))
+            XCTAssertEqual(request["headers"]?.object?["content-type"], .string("application/octet-stream"))
         }
     }
 
@@ -177,6 +232,84 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
                 }
             }
             XCTAssertTrue(try calls().isEmpty)
+        }
+    }
+
+    private static let routes: [(method: String, path: String, mutating: Bool)] = [
+        ("status", "status", false), ("send", "messages", true), ("reply", "replies", true), ("link", "links", true),
+        ("media.download", "media/download", false), ("messages.after", "messages/after", false),
+        ("messages.status", "messages/status", false), ("messages.search", "messages/search", false),
+        ("messages.edit", "messages/edit", true), ("messages.unsend", "messages/unsend", true),
+        ("messages.multipart", "messages/multipart", true), ("availability", "availability", false),
+        ("groups.create", "groups/create", true), ("groups.add", "groups/add", true), ("groups.remove", "groups/remove", true),
+        ("groups.name", "groups/name", true), ("groups.photo", "groups/photo", true), ("groups.leave", "groups/leave", true),
+        ("tapback", "tapbacks", true), ("read", "read", true), ("read.status", "read/status", false),
+        ("typing.start", "typing/start", true), ("typing.stop", "typing/stop", true),
+        ("media.visual", "media/visual", false), ("media.transcribe", "media/transcribe", false),
+        ("webhooks.register", "webhooks/register", true), ("webhooks.list", "webhooks/list", false),
+        ("webhooks.remove", "webhooks/remove", true), ("schedule.create", "schedules/create", true),
+        ("schedule.update", "schedules/update", true), ("schedule.cancel", "schedules/cancel", true),
+        ("schedule.get", "schedules/get", false), ("schedule.list", "schedules/list", false),
+    ]
+
+    func testFullRouteTableAndMutationClassification() async throws {
+        try await withPeer { client, calls in
+            var expected = 0
+            for route in Self.routes {
+                let id = UUID()
+                // Missing operation ID: mutations fail before dispatch, reads dispatch.
+                if route.mutating {
+                    do {
+                        _ = try await client.request(.object(["method": .string(route.method)]))
+                        XCTFail("Expected operation ID requirement for \(route.method)")
+                    } catch let error as BBCError {
+                        guard case .invalid = error else { return XCTFail("Unexpected error: \(error)") }
+                    }
+                    XCTAssertEqual(try calls().count, expected, route.method)
+                }
+                _ = try await client.request(.object(["method": .string(route.method)]), operationID: route.mutating ? id : nil)
+                expected += 1
+                let requests = try calls()
+                XCTAssertEqual(requests.count, expected, route.method)
+                let request = try XCTUnwrap(requests.last)
+                XCTAssertEqual(request["path"], .string("/v1/" + route.path), route.method)
+                XCTAssertEqual(request["method"], .string(route.method == "status" ? "GET" : "POST"), route.method)
+                XCTAssertEqual(request["headers"]?.object?["idempotency-key"], route.mutating ? .string(id.uuidString) : nil, route.method)
+            }
+        }
+    }
+
+    func testUploadSendsEveryByteValueExactly() async throws {
+        try await withPeer(status: 201, response: Data("{\"media_id\":\"m\"}".utf8)) { client, calls in
+            let bytes = Data((0...255).map { UInt8($0) } + [0, 0, 255])
+            _ = try await client.uploadMedia(bytes, filename: "all.bin")
+            XCTAssertEqual(try body(XCTUnwrap(calls().first)), bytes)
+        }
+    }
+
+    func testUploadRedirectIsRefusedWithoutReplay() async throws {
+        try await withPeer(status: 307, redirect: true) { client, calls in
+            do { _ = try await client.uploadMedia(Data([1, 2, 3]), filename: "fixture.png"); XCTFail("Expected upload failure") }
+            catch is BBCError { }
+            XCTAssertEqual(try calls().count, 1)
+        }
+    }
+
+    func testDisconnectAfterReadingMutationIsNotRetried() async throws {
+        try await withPeer(disconnect: true) { client, calls in
+            do {
+                _ = try await client.request(.object(["method": .string("send"), "params": .object(["text": .string("fixture")])]), operationID: UUID())
+                XCTFail("Expected transport failure")
+            } catch { }
+            XCTAssertEqual(try calls().count, 1)
+        }
+    }
+
+    func testDisconnectAfterReadingUploadIsNotRetried() async throws {
+        try await withPeer(disconnect: true) { client, calls in
+            do { _ = try await client.uploadMedia(Data([9, 0, 255]), filename: "fixture.bin"); XCTFail("Expected transport failure") }
+            catch { }
+            XCTAssertEqual(try calls().count, 1)
         }
     }
 

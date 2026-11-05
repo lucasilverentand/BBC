@@ -154,33 +154,7 @@ final class RichMessagingTests: XCTestCase {
         let videoUpload = try await store.create(video, filename: "clip.mov")
         XCTAssertEqual(try Data(contentsOf: store.resolve(videoUpload.id.uuidString).1), video)
     }
-    private func movie(seconds: Double) async throws -> Data {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appendingPathComponent("synthetic.mov")
-        let writer = try AVAssetWriter(outputURL: file, fileType: .mov)
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: 64, AVVideoHeightKey: 64])
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
-            kCVPixelBufferWidthKey as String: 64, kCVPixelBufferHeightKey as String: 64])
-        writer.add(input); XCTAssertTrue(writer.startWriting()); writer.startSession(atSourceTime: .zero)
-        for time in [0.0, seconds / 2] {
-            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(5)) }
-            var buffer: CVPixelBuffer?
-            XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 64, 64, kCVPixelFormatType_32ARGB, nil, &buffer), kCVReturnSuccess)
-            let pixels = try XCTUnwrap(buffer)
-            CVPixelBufferLockBaseAddress(pixels, [])
-            memset(CVPixelBufferGetBaseAddress(pixels), 127, CVPixelBufferGetDataSize(pixels))
-            CVPixelBufferUnlockBaseAddress(pixels, [])
-            XCTAssertTrue(adaptor.append(pixels, withPresentationTime: CMTime(seconds: time, preferredTimescale: 600)))
-        }
-        writer.endSession(atSourceTime: CMTime(seconds: seconds, preferredTimescale: 600))
-        input.markAsFinished(); await writer.finishWriting()
-        XCTAssertEqual(writer.status, .completed)
-        return try Data(contentsOf: file)
-    }
+    private func movie(seconds: Double) async throws -> Data { try await makeSyntheticMovie(seconds: seconds) }
     func testPrivateHandoffIsBoundedReusableAndRejectsSymlinks() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -234,7 +208,7 @@ final class RichMessagingTests: XCTestCase {
         let headers = ["authorization": "Bearer " + secret, "x-bbc-filename": "photo.png"]
         let uploaded = await router.handle(method: "POST", path: "/v1/media/upload", headers: headers, body: bytes)
         XCTAssertEqual(uploaded.status, 201); XCTAssertNotNil(uploaded.value.object?["media_id"]?.string)
-        let body = try JSONEncoder().encode(BBCJSONValue.object(["to": .string("fixture@example.test"), "media_id": uploaded.value.object!["media_id"]!]))
+        let body = try JSONEncoder().encode(BBCJSONValue.object(["to": .string("fixture@example.test"), "media_id": try XCTUnwrap(uploaded.value.object?["media_id"])]))
         let mutation = headers.merging(["idempotency-key": UUID().uuidString]) { _, new in new }
         _ = await router.handle(method: "POST", path: "/v1/messages", headers: mutation, body: body)
         _ = await router.handle(method: "POST", path: "/v1/messages", headers: mutation, body: body)

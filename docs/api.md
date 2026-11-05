@@ -87,9 +87,9 @@ alongside their own sender, conversation and authority checks.
 
 ## Threading
 
-A message page preserves `guid`, `chat_guid`, `reply_to_guid` and `thread_root_guid` separately. Apple's native thread originator identifies the reply root; it does not always expose an immediate parent reply. Top-level messages use their own GUID as `thread_root_guid`. Do not infer a thread from the latest message, matching text or another conversation with the same person.
+A message page preserves `guid`, `chat_guid`, `reply_to_guid` and `thread_root_guid` separately. Apple's native thread originator identifies the reply root; it does not always expose an immediate parent reply. Top-level messages use their own GUID as `thread_root_guid` and a null `reply_to_guid`. A malformed nonempty originator leaves the thread root unknown (`null`), rather than inventing a top-level thread. The local API and SDK history adapter follow the same rules. Do not infer a thread from the latest message, matching text or another conversation with the same person.
 
-Reply with the exact message GUID and chat GUID. The native adapter resolves the native thread identity, then confirms the new message against the database's thread root. The result includes `thread_root_guid` and the new message `guid`. An unavailable or ambiguous native part rejects the action. `read_guids` must cover the conversation's current unread messages before an action that may mark them read. A new unread message that was not consumed causes rejection.
+Reply with the exact message GUID and chat GUID. The worker resolves the database thread root before dispatch, so missing or malformed root metadata fails before sending. The native adapter waits once, within a bounded deadline, for an unloaded reply target and resolves its native thread identity. Confirmation checks only the native acknowledgement’s exact new message GUID against the chat, thread root, text and sent state; another message with identical text cannot substitute for it or make it ambiguous. The result includes `thread_root_guid` and the new message `guid`. An unavailable or ambiguous native part rejects the action. `read_guids` must cover the conversation's current unread messages before an action that may mark them read. A new unread message that was not consumed causes rejection.
 
 ## Tapbacks and read state
 

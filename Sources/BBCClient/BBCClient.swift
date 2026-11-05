@@ -118,8 +118,18 @@ public struct BBCClient: Sendable {
             if first == SQLITE_ROW, let raw = sqlite3_column_text(statement, 0) {
                 let service = String(cString: raw)
                 // The pinned reader may confuse the latest message with the reply root.
-                let root = sqlite3_column_text(statement, 1).flatMap { MessageGUID.normalize(String(cString: $0)) }
-                row["reply_to_guid"] = root.map(BBCJSONValue.string) ?? .null
+                let originator = sqlite3_column_text(statement, 1).map { String(cString: $0) }
+                let root: String?
+                if let originator, !originator.isEmpty {
+                    root = normalizeThreadGUID(originator)
+                } else {
+                    root = normalizeThreadGUID(guid)
+                }
+                let replyRoot = originator?.isEmpty == false ? root : nil
+                row["reply_to_guid"] = replyRoot.map(BBCJSONValue.string) ?? .null
+                // A native thread originator names the root, not an arbitrary
+                // parent. For a top-level message the message itself is root.
+                row["thread_root_guid"] = root.map(BBCJSONValue.string) ?? .null
                 guard sqlite3_step(statement) == SQLITE_DONE else { throw BBCError.unavailable("Messages transport identity is ambiguous.") }
                 row["service"] = .string(service)
                 if service == "iMessage", case .array(let attachments) = row["attachments"], !attachments.isEmpty {
@@ -129,6 +139,12 @@ public struct BBCClient: Sendable {
             return .object(row)
         })
         return .object(object)
+    }
+    private func normalizeThreadGUID(_ raw: String) -> String? {
+        if let guid = MessageGUID.normalize(raw) { return guid }
+        // Balloon references prefix a UUID with bp:, matching the local reader.
+        guard raw.hasPrefix("bp:") else { return nil }
+        return UUID(uuidString: String(raw.dropFirst(3)))?.uuidString
     }
     /// The pinned reader omits attachment GUIDs. Enrich only the exact local
     /// message/chat association with opaque IDs and bounded metadata; no paths.

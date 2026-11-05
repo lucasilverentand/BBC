@@ -14,11 +14,12 @@ private let chatID = "any;-;fixture@example.test"
     var targetAvailable = true
     var loadable = false
     var loads = 0
+    var loadedIdentity = targetID
     var last: FixtureMessage?
     @objc var guid: String { chatID }
     @objc(messageForGUID:) func message(_ guid: String) -> FixtureMessage? {
         guard guid == targetID, targetAvailable else { return nil }
-        let value = FixtureMessage(); value.identity = targetID; return value
+        let value = FixtureMessage(); value.identity = loadedIdentity; return value
     }
     @objc(sendMessage:) func send(_ value: FixtureMessage) { sends += 1; last = value }
     @objc(loadMessagesBeforeAndAfterGUID:numberOfMessagesToLoadBeforeGUID:numberOfMessagesToLoadAfterGUID:loadImmediately:threadIdentifier:)
@@ -53,7 +54,8 @@ private let chatID = "any;-;fixture@example.test"
     @objc var guid: String { identity }
     @objc(_imMessageItem) func item() -> FixtureItem { FixtureItem() }
     // A fixture target has a known native thread. No Apple API is called.
-    @objc var threadIdentifier: String { "fixture-native-thread" }
+    nonisolated(unsafe) static var threadAvailable = true
+    @objc var threadIdentifier: String? { Self.threadAvailable ? "fixture-native-thread" : nil }
     @objc var associatedMessageEmoji: String? { emoji }
     @objc(_associatedMessageEmoji:) func setEmoji(_ value: String) { emoji = value }
     @objc(instantMessageWithText:flags:threadIdentifier:)
@@ -107,7 +109,7 @@ private let chatID = "any;-;fixture@example.test"
 }
 
 final class NativeMessagingTests: XCTestCase {
-    override func setUp() { FixtureChat.shared = FixtureChat(); FixtureItem.ambiguous = false; FixtureFailingDetector.drainBeforeRaising = false; FixtureDelayedDetector.callback = nil; FixtureDelayedDetector.blockBeforeCallback = false }
+    override func setUp() { FixtureChat.shared = FixtureChat(); FixtureItem.ambiguous = false; FixtureMessage.threadAvailable = true; FixtureFailingDetector.drainBeforeRaising = false; FixtureDelayedDetector.callback = nil; FixtureDelayedDetector.blockBeforeCallback = false }
     private var resolver: BBCNativeClassResolver {
         { name in
             switch name {
@@ -125,13 +127,23 @@ final class NativeMessagingTests: XCTestCase {
         // The exact target's guid must differ from the newly created message.
         var result: [String:Any] = [:]
         let completed = expectation(description:"native result")
-        BBCNativePerform(request,resolver) { result = $0; completed.fulfill() }
-        wait(for:[completed],timeout:6)
+        BBCNativePerformWithTimeouts(request,resolver,0.2,BBCNativeDefaultScanTimeout) { result = $0; completed.fulfill() }
+        wait(for:[completed],timeout:2.2)
         return result
     }
     func testUnknownChatAndMessageCannotDispatch() {
         XCTAssertEqual(perform("tapback",fields:["chat_guid":"any;-;other@example.test"])["ok"] as? Bool,false)
         XCTAssertEqual(perform("tapback",fields:["message_guid":sentID])["ok"] as? Bool,false)
+        XCTAssertEqual(FixtureChat.shared.sends,0)
+    }
+    func testEvictedReplyCannotSendWhenLoadedTargetHasDifferentIdentity() {
+        FixtureChat.shared.targetAvailable = false
+        FixtureChat.shared.loadable = true
+        FixtureChat.shared.loadedIdentity = sentID
+        let result = perform("reply",fields:["text":"fixture reply"])
+        XCTAssertEqual(result["ok"] as? Bool,false)
+        XCTAssertEqual(result["uncertain"] as? Bool,false)
+        XCTAssertEqual(FixtureChat.shared.loads,1)
         XCTAssertEqual(FixtureChat.shared.sends,0)
     }
     func testExpiredTypingCannotStartAnIndicator() {
@@ -147,6 +159,70 @@ final class NativeMessagingTests: XCTestCase {
         XCTAssertEqual(FixtureChat.shared.sends,1)
         XCTAssertEqual(FixtureChat.shared.last?.emoji,"🦥")
         XCTAssertEqual(FixtureChat.shared.last?.association,"p:0/"+targetID)
+    }
+    func testEvictedReplyTargetLoadsOnceBeforeOneThreadedSend() {
+        FixtureChat.shared.targetAvailable = false
+        FixtureChat.shared.loadable = true
+        let result = perform("reply",fields:["text":"evicted reply"])
+        XCTAssertEqual(result["ok"] as? Bool,true)
+        XCTAssertEqual(FixtureChat.shared.loads,1)
+        XCTAssertEqual(FixtureChat.shared.sends,1)
+        XCTAssertEqual(FixtureChat.shared.last?.thread,"fixture-native-thread")
+        XCTAssertEqual(FixtureChat.shared.last?.body.string,"evicted reply")
+    }
+    func testReplyLoadedAfterDeadlineCannotSendFromDelayedContinuation() {
+        FixtureChat.shared.targetAvailable = false
+        FixtureChat.shared.loadable = true
+        var result: [String:Any] = [:]
+        let completed = expectation(description:"expired reply load")
+        BBCNativePerformWithTimeouts(["method":"reply","chat_guid":chatID,"message_guid":targetID,"text":"late reply"],resolver,0.02,10) { result = $0; completed.fulfill() }
+        wait(for:[completed],timeout:2)
+        XCTAssertTrue(FixtureChat.shared.targetAvailable)
+        XCTAssertEqual(result["failure_code"] as? String,"native_message_missing")
+        XCTAssertEqual(result["uncertain"] as? Bool,false)
+        XCTAssertEqual(FixtureChat.shared.loads,1)
+        XCTAssertEqual(FixtureChat.shared.sends,0)
+    }
+    func testMissingReplyTargetTimesOutWithoutSend() {
+        FixtureChat.shared.targetAvailable = false
+        let result = perform("reply",fields:["text":"missing reply"])
+        XCTAssertEqual(result["failure_code"] as? String,"native_message_missing")
+        XCTAssertEqual(result["uncertain"] as? Bool,false)
+        XCTAssertEqual(FixtureChat.shared.loads,1)
+        XCTAssertEqual(FixtureChat.shared.sends,0)
+    }
+    func testUnavailableOrAmbiguousNativeReplyThreadNeverSends() {
+        FixtureMessage.threadAvailable = false
+        for ambiguous in [false,true] {
+            FixtureItem.ambiguous = ambiguous
+            let result = perform("reply",fields:["text":"unavailable reply"])
+            XCTAssertEqual(result["failure_code"] as? String,"native_thread_unavailable")
+            XCTAssertEqual(result["uncertain"] as? Bool,false)
+        }
+        XCTAssertEqual(FixtureChat.shared.sends,0)
+    }
+    func testShortLoadTimeoutFailsMissingTargetWithoutDispatchOrFiveSecondWait() {
+        FixtureChat.shared.targetAvailable = false
+        var result: [String:Any] = [:]
+        let completed = expectation(description:"short load timeout")
+        let started = Date()
+        BBCNativePerformWithTimeouts(["method":"tapback","chat_guid":chatID,"message_guid":targetID,"reaction":"🦥","associated_message_guid":"p:0/"+targetID],resolver,0.2,5) { result = $0; completed.fulfill() }
+        wait(for:[completed],timeout:4)
+        XCTAssertLessThan(Date().timeIntervalSince(started),3)
+        XCTAssertEqual(result["ok"] as? Bool,false)
+        XCTAssertEqual(result["failure_code"] as? String,"native_message_missing")
+        XCTAssertEqual(FixtureChat.shared.loads,1)
+        XCTAssertEqual(FixtureChat.shared.sends,0)
+    }
+    func testPublicEntryPointsRetainProductionTimeoutDefaults() {
+        XCTAssertEqual(BBCNativeDefaultLoadTimeout,5)
+        XCTAssertEqual(BBCNativeDefaultScanTimeout,10)
+        for (load,scan) in [(0.0,1.0),(5.1,1.0),(.nan,1.0),(1.0,0.0),(1.0,10.1)] {
+            var result: [String:Any] = [:]
+            BBCNativePerformWithTimeouts([:],resolver,load,scan) { result = $0 }
+            XCTAssertEqual(result["ok"] as? Bool,false)
+            XCTAssertTrue((result["failure_code"] as? String ?? "").hasPrefix("native_invalid_"))
+        }
     }
     func testTypingCleanupSurvivesAnchorEviction() {
         FixtureChat.shared.typing = true

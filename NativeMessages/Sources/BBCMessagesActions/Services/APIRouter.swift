@@ -16,6 +16,20 @@ import BBCClient
          execute: @escaping @MainActor (BBCJSONValue) async throws -> BBCJSONValue) {
         self.keys = keys; self.webhooks = webhooks; self.schedules = schedules; self.mode = mode; self.execute = execute
     }
+    static let routeMethods: [String: String] = [
+            "/v1/messages":"send", "/v1/messages/after":"messages.after", "/v1/messages/status":"messages.status",
+            "/v1/messages/search":"messages.search", "/v1/messages/edit":"messages.edit", "/v1/messages/unsend":"messages.unsend",
+            "/v1/messages/multipart":"messages.multipart", "/v1/availability":"availability",
+            "/v1/groups/create":"groups.create", "/v1/groups/add":"groups.add", "/v1/groups/remove":"groups.remove",
+            "/v1/groups/name":"groups.name", "/v1/groups/photo":"groups.photo", "/v1/groups/leave":"groups.leave",
+            "/v1/replies":"reply", "/v1/links":"link", "/v1/media/download":"media.download", "/v1/tapbacks":"tapback",
+            "/v1/read":"read", "/v1/read/status":"read.status", "/v1/typing/start":"typing.start", "/v1/typing/stop":"typing.stop",
+            "/v1/media/visual":"media.visual", "/v1/media/transcribe":"media.transcribe",
+            "/v1/webhooks/register":"webhooks.register", "/v1/webhooks/list":"webhooks.list", "/v1/webhooks/remove":"webhooks.remove",
+            "/v1/schedules/create":"schedule.create", "/v1/schedules/update":"schedule.update", "/v1/schedules/cancel":"schedule.cancel",
+            "/v1/schedules/get":"schedule.get", "/v1/schedules/list":"schedule.list"
+    ]
+    static let observationalMethods: Set<String> = ["messages.after","messages.status","messages.search","availability","media.download","read.status","media.visual","media.transcribe","webhooks.list","schedule.get","schedule.list"]
     struct Response { let status: Int; let value: BBCJSONValue }
     struct Operation: Codable { let fingerprint: String; var result: BBCJSONValue? }
 
@@ -60,23 +74,10 @@ import BBCClient
                 return .init(status: 201, value: try await store.create(body, filename: filename).packet)
             }
             let request = try JSONDecoder().decode(BBCJSONValue.self, from: body)
-            let endpointMethods = [
-                "/v1/messages":"send", "/v1/messages/after":"messages.after", "/v1/messages/status":"messages.status",
-                "/v1/messages/search":"messages.search", "/v1/messages/edit":"messages.edit", "/v1/messages/unsend":"messages.unsend",
-                "/v1/messages/multipart":"messages.multipart", "/v1/availability":"availability",
-                "/v1/groups/create":"groups.create", "/v1/groups/add":"groups.add", "/v1/groups/remove":"groups.remove",
-                "/v1/groups/name":"groups.name", "/v1/groups/photo":"groups.photo", "/v1/groups/leave":"groups.leave",
-                "/v1/replies":"reply", "/v1/links":"link", "/v1/media/download":"media.download", "/v1/tapbacks":"tapback",
-                "/v1/read":"read", "/v1/read/status":"read.status", "/v1/typing/start":"typing.start", "/v1/typing/stop":"typing.stop",
-                "/v1/media/visual":"media.visual", "/v1/media/transcribe":"media.transcribe",
-                "/v1/webhooks/register":"webhooks.register", "/v1/webhooks/list":"webhooks.list", "/v1/webhooks/remove":"webhooks.remove",
-                "/v1/schedules/create":"schedule.create", "/v1/schedules/update":"schedule.update", "/v1/schedules/cancel":"schedule.cancel",
-                "/v1/schedules/get":"schedule.get", "/v1/schedules/list":"schedule.list"
-            ]
-            guard let operationMethod = endpointMethods[path], var params = request.object else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
+            guard let operationMethod = Self.routeMethods[path], var params = request.object else { return .init(status: 404, value: .object(["error": .string("not_found")])) }
             guard mode.allows(method:operationMethod) else { return readOnlyDenied }
             guard keys.allows(keyID,method:operationMethod) else { return keyDenied }
-            let observational = ["messages.after","messages.status","messages.search","availability","media.download","read.status","media.visual","media.transcribe","webhooks.list","schedule.get","schedule.list"].contains(operationMethod)
+            let observational = Self.observationalMethods.contains(operationMethod)
             if operationMethod == "send" {
                 params["service"] = .string("imessage"); params["allow_sms_fallback"] = .bool(false)
             }

@@ -6,11 +6,15 @@ import XCTest
     func testBoundedHistoryPersistsAndClears() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let log = AppLog(directory: directory)
+        // Synthetic files must remain readable when the host keybag is unavailable.
+        // Production keeps its completeFileProtectionUnlessOpen default.
+        let log = AppLog(directory: directory, writingOptions: .atomic)
         for index in 0...AppLog.capacity { log.record("Event \(index)", level: index == AppLog.capacity ? .error : .info) }
         XCTAssertEqual(log.entries.count, AppLog.capacity)
         XCTAssertEqual(log.entries.first?.message, "Event 1")
-        let restored = AppLog(directory: directory)
+        let saved = try JSONDecoder().decode([AppLogEntry].self, from: Data(contentsOf: directory.appendingPathComponent("activity-log.json")))
+        XCTAssertEqual(saved.count, AppLog.capacity)
+        let restored = AppLog(directory: directory, writingOptions: .atomic)
         XCTAssertEqual(restored.entries.count, AppLog.capacity)
         XCTAssertEqual(restored.entries.last?.level, .error)
         XCTAssertTrue(restored.text.contains("[Error] Event \(AppLog.capacity)"))

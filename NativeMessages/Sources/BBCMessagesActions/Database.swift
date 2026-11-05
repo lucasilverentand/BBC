@@ -61,7 +61,8 @@ final class MessagesDatabase {
     }
     func threadRoot(chat: String, message: String) throws -> String {
         try verify(chat: chat, message: message)
-        let raw = try rows("SELECT m.thread_originator_guid FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id WHERE c.guid=?1 AND m.guid=?2 LIMIT 2", [chat,message]).first?.first ?? ""
+        let values = try rows("SELECT m.thread_originator_guid FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id WHERE c.guid=?1 AND m.guid=?2 LIMIT 2", [chat,message])
+        guard values.count == 1, let raw = values.first?.first else { throw ActionFailure.invalid }
         let value = raw.isEmpty ? message : raw
         guard let guid = normalizedGUID(value) else { throw ActionFailure.invalid }
         return guid
@@ -74,6 +75,19 @@ final class MessagesDatabase {
             """,[chat,String(after),text]).filter { normalizedGUID($0[1]) == root }
         guard values.count <= 1 else { throw ActionFailure.uncertain }
         return values.first?.first
+    }
+    /// Confirm only the native acknowledgement's exact new message, never a text-derived candidate.
+    func confirmedReply(chat: String, root: String, text: String, sent: String, after: Int64) throws -> Bool {
+        guard UUID(uuidString: sent) != nil, UUID(uuidString: root) != nil else { throw ActionFailure.invalid }
+        let values = try rows("""
+            SELECT m.thread_originator_guid FROM message m
+            JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id
+            WHERE m.guid=?1 AND c.guid=?2 AND m.ROWID>CAST(?3 AS INTEGER)
+            AND m.is_from_me=1 AND m.service='iMessage' AND m.text=?4
+            AND m.is_sent=1 AND COALESCE(m.error,0)=0 LIMIT 2
+            """, [sent,chat,String(after),text])
+        guard values.count <= 1 else { throw ActionFailure.uncertain }
+        return values.count == 1 && normalizedGUID(values[0][0]) == root
     }
     func reaction(chat: String, message: String) throws -> Int? {
         try reactionValue(chat: chat, message: message).flatMap { NativeRequest.reactions.firstIndex(of: $0) }
