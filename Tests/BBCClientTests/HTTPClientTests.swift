@@ -7,7 +7,10 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
     private struct PeerFailure: Error, CustomStringConvertible { let description: String }
 
     private static let peerSource = """
-    import base64, http.server, json, os, pathlib, socket, sys, traceback
+    import sys
+    print('fixture interpreter: ' + sys.executable, flush=True)
+    import base64, http.server, json, os, pathlib, socket, socketserver, traceback
+    print('fixture imports ready', flush=True)
     root = pathlib.Path(sys.argv[1])
     config = json.loads((root / 'config.json').read_text())
     response = base64.b64decode(config['response_b64'])
@@ -33,10 +36,18 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
             self.send_header('Connection', 'close')
             self.end_headers()
             self.wfile.write(response)
+    class LoopbackServer(http.server.HTTPServer):
+        def server_bind(self):
+            # The fixture has a fixed loopback identity; no reverse DNS is needed.
+            socketserver.TCPServer.server_bind(self)
+            self.server_name = 'localhost'
+            self.server_port = self.server_address[1]
     try:
-        server = http.server.HTTPServer(('127.0.0.1', 0), Peer)
+        print('fixture binding loopback', flush=True)
+        server = LoopbackServer(('127.0.0.1', 0), Peer)
         (root / 'port.tmp').write_text(str(server.server_port))
         os.replace(root / 'port.tmp', root / 'port')
+        print('fixture listening', flush=True)
         server.serve_forever()
     except BaseException:
         traceback.print_exc()
@@ -71,8 +82,14 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(FileManager.default.createFile(atPath: diagnosticsFile.path, contents: nil))
         let diagnostics = try FileHandle(forWritingTo: diagnosticsFile)
         let process = Process()
+        #if os(macOS)
+        // Match the stdio fixtures and avoid runner-specific Python shims/site setup.
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = ["-I", "-u", script.path, directory.path]
+        #else
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", script.path, directory.path]
+        process.arguments = ["python3", "-I", "-u", script.path, directory.path]
+        #endif
         process.standardOutput = diagnostics
         process.standardError = diagnostics
         func peerDiagnostics() -> String {
@@ -90,7 +107,8 @@ final class HTTPClientTests: XCTestCase, @unchecked Sendable {
             }
             guard let port = try? String(contentsOf: portFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
                   let portNumber = UInt16(port), portNumber != 0, let baseURL = URL(string: "http://127.0.0.1:\(portNumber)") else {
-                throw PeerFailure(description: "Fixture peer did not publish a port within 5 seconds: \(peerDiagnostics())")
+                let state = process.isRunning ? "running" : "exit \(process.terminationStatus)"
+                throw PeerFailure(description: "Fixture peer did not publish a port within 5 seconds (\(state)): \(peerDiagnostics())")
             }
             let client = BBCHTTPClient(baseURL: baseURL, apiKey: "fixture-only-key")
             try await run(client) {
