@@ -13,10 +13,14 @@ final class LocalAPIServer: @unchecked Sendable {
          onResponse: @escaping @MainActor @Sendable (String, Int) -> Void = { _, _ in }) throws {
         self.router = router; self.onResponse = onResponse
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!)
+        // Port zero asks the system for an ephemeral port; see `boundPort`.
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else { throw URLError(.badURL) }
+        parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(host), port: endpointPort)
         listener = try NWListener(using: parameters)
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
     }
+    /// The actual listening port once the listener is ready; nil before that.
+    var boundPort: UInt16? { listener.port?.rawValue }
     func start(state: @escaping @Sendable (Bool) -> Void) {
         listener.stateUpdateHandler = { value in
             switch value { case .ready: state(true); case .failed, .cancelled: state(false); default: break }
@@ -24,6 +28,10 @@ final class LocalAPIServer: @unchecked Sendable {
         listener.start(queue: queue)
     }
     func stop() { listener.cancel(); queue.async { for connection in self.connections.values { connection.cancel() }; self.connections.removeAll() } }
+    /// Cancels network resources on the listener queue before returning.
+    /// Already dispatched router operations retain normal completion semantics.
+    /// Never call from `queue`.
+    func stopAndDrain() { listener.cancel(); queue.sync { for connection in connections.values { connection.cancel() }; connections.removeAll() } }
     private func accept(_ connection: NWConnection) {
         guard connections.count < 8 else { connection.cancel(); return }
         let id = UUID(); connections[id] = connection

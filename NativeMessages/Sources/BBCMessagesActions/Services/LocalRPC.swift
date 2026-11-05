@@ -6,88 +6,130 @@ import BBCClient
 
 /// One-shot worker mode of the app itself. No separate helper executable.
 @MainActor enum LocalRPC {
+    /// Everything the worker reads from its process environment. Production
+    /// defaults are the real arguments, home directory and confirmation timing.
+    struct Environment {
+        var arguments: [String] = CommandLine.arguments
+        var mode: OperatingMode = .current
+        var databaseURL: URL?
+        var supportDirectory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions")
+        var mediaDirectory: URL = MediaStore.defaultDirectory
+        var handoffDirectory: URL = MediaStore.handoffDirectory
+        var confirmationTimeout: TimeInterval = 8
+        var pollInterval: TimeInterval = 0.1
+        var resolvedDatabaseURL: URL {
+            if let databaseURL { return databaseURL }
+            if let index = arguments.firstIndex(of: "--db"), arguments.indices.contains(index + 1) { return URL(fileURLWithPath: arguments[index + 1]) }
+            return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/chat.db")
+        }
+    }
+    /// Thrown by an executor that could not start the script at all.
+    struct ScriptNotStarted: Error {}
+    /// Startup, permission and script actions; replaceable in tests.
+    struct Actions {
+        var ensureRunning: () async throws -> pid_t
+        var automationStatus: (pid_t?) -> OSStatus
+        /// Runs AppleScript source. Throws ScriptNotStarted if nothing ran, any other error after entry.
+        var execute: (String) throws -> Void
+        @MainActor static var live: Actions { Actions(
+            ensureRunning: { try await NativeMessagesStartup.ensureRunning() },
+            automationStatus: { NativeMessagesStartup.automationStatus(pid: $0) },
+            execute: { source in
+                guard let script = NSAppleScript(source: source) else { throw ScriptNotStarted() }
+                var error: NSDictionary?
+                _ = script.executeAndReturnError(&error)
+                guard error == nil else { throw ActionFailure.uncertain }
+            }) }
+    }
+    /// Set immediately before the script executor is invoked.
+    private final class Attempt { var dispatched = false }
+
     static func run() async {
-        var id: BBCJSONValue = .null
+        var input = Data()
         do {
-            var input = Data()
             while let chunk = try FileHandle.standardInput.read(upToCount: 8192), !chunk.isEmpty {
                 guard input.count + chunk.count <= 65536 else { throw ActionFailure.invalid }; input.append(chunk)
             }
+        } catch { emit(failure(id: .null, disposition: "not-dispatched")); return }
+        emit(await respond(to: input, environment: Environment(), actions: .live))
+    }
+    private static func failure(id: BBCJSONValue, disposition: String) -> BBCJSONValue {
+        .object(["jsonrpc": .string("2.0"), "id": id, "error": .object([
+            "code": .number(-32000), "message": .string("Local operation failed; reconcile before retrying."),
+            "data": .object(["disposition": .string(disposition)])])])
+    }
+    /// Request in, JSON-RPC response out. No process I/O.
+    static func respond(to input: Data, environment: Environment, actions: Actions) async -> BBCJSONValue {
+        var id: BBCJSONValue = .null
+        let attempt = Attempt()
+        do {
             let request = try JSONDecoder().decode(BBCJSONValue.self, from: input)
             id = request.object?["id"] ?? .null
             guard let method = request.object?["method"]?.string else { throw ActionFailure.invalid }
-            guard OperatingMode.current.allows(method:method) else {
-                emit(.object(["jsonrpc":.string("2.0"),"id":id,"error":.object([
+            guard environment.mode.allows(method:method) else {
+                return .object(["jsonrpc":.string("2.0"),"id":id,"error":.object([
                     "code":.number(-32003),"message":.string("Read-only mode blocks this operation."),
-                    "data":.object(["disposition":.string("rejected")])])]))
-                return
+                    "data":.object(["disposition":.string("rejected")])])])
             }
             let parameters = request.object?["params"]?.object ?? [:]
-            let args = CommandLine.arguments
-            let databaseURL: URL
-            if let index = args.firstIndex(of: "--db"), args.indices.contains(index + 1) { databaseURL = URL(fileURLWithPath: args[index + 1]) }
-            else { databaseURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/chat.db") }
-            let db = try MessagesDatabase(url: databaseURL)
+            let db = try MessagesDatabase(url: environment.resolvedDatabaseURL)
             let result: BBCJSONValue
             switch method {
             case "status":
                 _ = try db.maximumRowID()
                 var methods = ["messages.after", "messages.status", "messages.search", "media.download"]
-                if OperatingMode.current == .full, NativeMessagesStartup.automationStatus() == noErr { methods.append("send") }
+                if environment.mode == .full, actions.automationStatus(nil) == noErr { methods.append("send") }
                 result = .object(["version": .string("bbc-1"), "methods": .array(methods.map(BBCJSONValue.string))])
             case "messages.after": result = try db.page(parameters)
             case "messages.search": result = try db.search(parameters)
             case "messages.status": result = try db.messageStatus(parameters)
             case "media.download": result = try db.download(parameters)
-            case "send": result = try await send(parameters, database: db)
+            case "send": result = try await send(parameters, database: db, environment: environment, actions: actions, attempt: attempt)
             default: throw ActionFailure.invalid
             }
-            emit(.object(["jsonrpc": .string("2.0"), "id": id, "result": result]))
+            return .object(["jsonrpc": .string("2.0"), "id": id, "result": result])
         } catch {
-            emit(.object(["jsonrpc": .string("2.0"), "id": id, "error": .object([
-                "code": .number(-32000), "message": .string("Local operation failed; reconcile before retrying."),
-                "data": .object(["disposition": .string("uncertain")])])]))
+            return failure(id: id, disposition: attempt.dispatched ? "uncertain" : "not-dispatched")
         }
+    }
+    /// The attempt is already recorded; only an executor that never started the script clears it.
+    private static func run(_ actions: Actions, _ source: String, _ attempt: Attempt) throws {
+        do { try actions.execute(source) } catch is ScriptNotStarted { attempt.dispatched = false; throw ActionFailure.invalid }
     }
     private static func emit(_ value: BBCJSONValue) {
         if let data = try? JSONEncoder().encode(value) { try? FileHandle.standardOutput.write(contentsOf: data + Data([10])) }
     }
-    private static func send(_ p: [String: BBCJSONValue], database: MessagesDatabase) async throws -> BBCJSONValue {
+    private static func send(_ p: [String: BBCJSONValue], database: MessagesDatabase, environment: Environment, actions: Actions, attempt: Attempt) async throws -> BBCJSONValue {
         guard getuid() != 0, getuid() == geteuid(), p["service"]?.string == "imessage",
               p["allow_sms_fallback"]?.bool != true,
               let to = p["to"]?.string, to.utf8.count <= 254,
               to.range(of: #"^(\+[1-9][0-9]{6,14}|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)$"#, options: .regularExpression) != nil,
               !to.utf8.contains(0) else { throw ActionFailure.invalid }
         let text = p["text"]?.string
-        let media = try p["media_id"]?.string.map { try MediaStore().resolve($0) }
+        let media = try p["media_id"]?.string.map { try MediaStore(directory: environment.mediaDirectory).resolve($0) }
         guard (text == nil) != (media == nil) else { throw ActionFailure.invalid }
         if let text { guard !text.isEmpty, text.utf8.count <= 64000, !text.utf8.contains(0) else { throw ActionFailure.invalid } }
-        let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions")
+        let directory = environment.supportDirectory
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let lock = open(directory.appendingPathComponent("automation.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
         guard lock >= 0 else { throw ActionFailure.unavailable }; defer { close(lock) }
         guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { throw ActionFailure.busy }; defer { flock(lock, LOCK_UN) }
-        let pid = try await NativeMessagesStartup.ensureRunning()
-        guard NativeMessagesStartup.automationStatus(pid: pid) == noErr else { throw ActionFailure.unavailable }
+        let pid = try await actions.ensureRunning()
+        guard actions.automationStatus(pid) == noErr else { throw ActionFailure.unavailable }
         let before = try database.maximumRowID()
         if let media {
-            let file = try MediaStore.stageHandoff(upload: media.0, source: media.1)
-            guard let script = NSAppleScript(source: MessageSendScript.file(to: to, file: file)) else { throw ActionFailure.invalid }
-            var error: NSDictionary?
-            _ = script.executeAndReturnError(&error)
-            guard error == nil else { throw ActionFailure.uncertain }
+            let file = try MediaStore.stageHandoff(upload: media.0, source: media.1, directory: environment.handoffDirectory)
+            attempt.dispatched = true
+            try run(actions, MessageSendScript.file(to: to, file: file), attempt)
         } else {
-            let source = MessageSendScript.text(to: to, text: text!)
-            guard let script = NSAppleScript(source: source) else { throw ActionFailure.invalid }
-            var error: NSDictionary?
-            _ = script.executeAndReturnError(&error)
-            guard error == nil else { throw ActionFailure.uncertain }
+            attempt.dispatched = true
+            try run(actions, MessageSendScript.text(to: to, text: text!), attempt)
         }
-        let deadline = Date().addingTimeInterval(8)
+        let deadline = Date().addingTimeInterval(environment.confirmationTimeout)
         repeat {
             if let media {
                 if let sent = try database.confirmedMedia(to: to, upload: media.0, after: before) {
-                    if (try? database.handoffCopied(message: sent.0, upload: media.0)) == true { try? MediaStore.removeHandoff(upload: media.0) }
+                    if (try? database.handoffCopied(message: sent.0, upload: media.0)) == true { try? MediaStore.removeHandoff(upload: media.0, directory: environment.handoffDirectory) }
                     return .object(["ok": .bool(true), "guid": .string(sent.0), "chat_guid": .string(sent.1),
                                     "media_id": .string(media.0.id.uuidString), "confirmation": .string("local-database")])
                 }
@@ -101,7 +143,7 @@ import BBCClient
                 if result.count == 1 { return .object(["ok": .bool(true), "guid": .string(result[0][0]), "chat_guid": .string(result[0][1]), "confirmation": .string("local-database")]) }
                 if result.count > 1 { throw ActionFailure.uncertain }
             }
-            try await Task.sleep(for: .milliseconds(100))
+            try await Task.sleep(for: .seconds(environment.pollInterval))
         } while Date() < deadline
         throw ActionFailure.uncertain
     }
@@ -138,6 +180,7 @@ extension MessagesDatabase {
             if text.isEmpty, row[11].count <= 4_000_000, let data = Data(hex: row[11]) { text = (try? AttributedBodyDecoder.plainText(from: data)) ?? "" }
             let reaction = Int(row[9]) ?? 0
             let root = normalizedGUID(row[8])
+            let threadRoot = row[8].isEmpty ? normalizedGUID(row[1]) : root
             let attachmentRows = try rows("""
                 SELECT a.guid,COALESCE(a.mime_type,''),COALESCE(a.uti,''),COALESCE(a.total_bytes,0),COALESCE(a.is_sticker,0), \(transferName)
                 FROM attachment a JOIN message_attachment_join j ON j.attachment_id=a.ROWID JOIN message m ON m.ROWID=j.message_id WHERE m.guid=?1 ORDER BY a.ROWID LIMIT 20
@@ -148,7 +191,7 @@ extension MessagesDatabase {
                 "is_group": .bool(participants.count != 1 || row[2].contains(";+;")), "participants": .array(participants.map(BBCJSONValue.string)),
                 "created_at": .string(ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 978307200 + (Double(row[6]) ?? 0) / 1_000_000_000))),
                 "service": .string(row[7]), "reply_to_guid": root.map(BBCJSONValue.string) ?? .null,
-                "thread_root_guid": .string(root ?? row[1]), "attachments": .array(attachments),
+                "thread_root_guid": threadRoot.map(BBCJSONValue.string) ?? .null, "attachments": .array(attachments),
                 "links": .array(RichLinks.decode(Data(hex: row[13]), text: text, attachmentGUIDs: attachmentRows.filter { $0[5].lowercased().hasSuffix(".pluginpayloadattachment") }.map { $0[0] })),
                 "is_audio_message": .bool(row[14] == "1"),
                 "item_type": Int(row[15]).map { BBCJSONValue.number(Double($0)) } ?? .null,

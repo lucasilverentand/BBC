@@ -5,7 +5,16 @@ import BBCClient
 /// Local IPC only. All mutable state belongs to queue; no native call is retried.
 final class BridgeBroker: @unchecked Sendable {
     private static let advancedMethods = Set(["groups.create","groups.add","groups.remove","groups.name","groups.photo","groups.leave","messages.edit","messages.unsend","messages.multipart","availability"])
+    /// Production defaults are unchanged; tests inject shorter deadlines and smaller limits.
+    struct Configuration: Sendable {
+        var commandDeadline: TimeInterval = 24
+        var authenticationDeadline: TimeInterval = 5
+        var maximumClients = 10
+        var maximumPending = 8
+        static let production = Configuration()
+    }
     private let listener: NWListener
+    private let configuration: Configuration
     private let queue = DispatchQueue(label:"club.bluebubble.native-bridge")
     private let helperSecret: String
     private let workerSecret: String
@@ -16,7 +25,12 @@ final class BridgeBroker: @unchecked Sendable {
     private var completed: Set<String> = []
     private var completedOrder: [String] = []
     private var startReported = false
+    private var stopped = false
+    private var listenerStarted = false
+    private var listenerCancelled = false
+    private var cancelWaiters: [() -> Void] = []
     private let endpointURL: URL
+    private final class Once: @unchecked Sendable { var done = false }
     private final class Client: @unchecked Sendable {
         let connection: NWConnection
         let nonce = UUID().uuidString
@@ -25,7 +39,8 @@ final class BridgeBroker: @unchecked Sendable {
         var buffer = Data()
         init(_ connection: NWConnection) { self.connection = connection }
     }
-    init(directory: URL = BridgeWire.directory, helperSecret: String? = nil, workerSecret: String? = nil) throws {
+    init(directory: URL = BridgeWire.directory, helperSecret: String? = nil, workerSecret: String? = nil, configuration: Configuration = .production) throws {
+        self.configuration = configuration
         self.helperSecret = try helperSecret ?? BridgeWire.secret()
         self.workerSecret = try workerSecret ?? BridgeWire.secret()
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
@@ -52,24 +67,43 @@ final class BridgeBroker: @unchecked Sendable {
             } else {
                 switch state {
                 case .failed, .cancelled:
+                    if case .cancelled = state { self.queue.async { self.listenerCancelled = true; let waiters = self.cancelWaiters; self.cancelWaiters = []; waiters.forEach { $0() } } }
                     self.stop()
                     if !self.startReported { self.startReported = true; ready(nil,nil) }
                 default: break
                 }
             }
         }
+        queue.async { self.listenerStarted = true }
         listener.start(queue:queue)
     }
     func stop() {
         listener.cancel()
-        queue.async {
-            for client in self.clients.values { client.connection.cancel() }
-            self.clients.removeAll(); self.helper = nil; self.capabilities = []; self.pending.removeAll()
-            if let endpoint = try? BridgeWire.Endpoint.load(from:self.endpointURL), endpoint.ownerPID == getpid(), BridgeWire.equal(endpoint.secret,self.workerSecret) { try? FileManager.default.removeItem(at:self.endpointURL) }
+        queue.async { self.teardown() }
+    }
+    /// Stops accepting, closes every connection and removes only an endpoint file this broker wrote.
+    /// Returns after teardown and listener cancellation (or `timeout`); safe to call repeatedly.
+    func shutdown(timeout: TimeInterval = 5) async {
+        listener.cancel()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void,Never>) in
+            queue.async {
+                self.teardown()
+                let once = Once()   // only touched on `queue`
+                let finish: @Sendable () -> Void = { if !once.done { once.done = true; continuation.resume() } }
+                if self.listenerCancelled || !self.listenerStarted { finish(); return }
+                self.cancelWaiters.append(finish)
+                self.queue.asyncAfter(deadline:.now()+timeout) { finish() }
+            }
         }
     }
+    private func teardown() {
+        stopped = true
+        for client in clients.values { client.connection.cancel() }
+        clients.removeAll(); helper = nil; capabilities = []; pending.removeAll()
+        if let endpoint = try? BridgeWire.Endpoint.load(from:endpointURL), endpoint.ownerPID == getpid(), BridgeWire.equal(endpoint.secret,workerSecret) { try? FileManager.default.removeItem(at:endpointURL) }
+    }
     private func accept(_ connection: NWConnection) {
-        guard clients.count < 10 else { connection.cancel(); return }
+        guard !stopped, clients.count < configuration.maximumClients else { connection.cancel(); return }
         let id = UUID(), client = Client(connection); clients[id] = client
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             if case .failed = state { connection?.cancel() }
@@ -77,7 +111,7 @@ final class BridgeBroker: @unchecked Sendable {
         }
         connection.start(queue:queue)
         send(.object(["kind":.string("challenge"),"nonce":.string(client.nonce)]),to:client)
-        queue.asyncAfter(deadline:.now()+5) { if client.role == nil { connection.cancel() } }
+        queue.asyncAfter(deadline:.now()+configuration.authenticationDeadline) { if client.role == nil { connection.cancel() } }
         receive(id)
     }
     private func closed(_ id: UUID) {
@@ -126,17 +160,22 @@ final class BridgeBroker: @unchecked Sendable {
         guard !client.called, kind == "call", let requestID = fields["id"]?.string, UUID(uuidString:requestID) != nil,
               let request = fields["request"], let method = request.object?["method"]?.string else { client.connection.cancel(); return }
         client.called = true
+        // A duplicate of an in-flight id belongs to the original transaction: reject this caller
+        // directly and never touch `pending`/`completed`, or the real result would be discarded.
+        if pending[requestID] != nil {
+            send(.object(["kind":.string("result"),"id":.string(requestID),"result":.object(["ok":.bool(false),"uncertain":.bool(false),"failure_code":.string("native_bridge_unavailable")])]),to:client,close:true); return
+        }
         if method == "bridge.status" {
             finish(requestID,worker:id,result:.object(["ready":.bool(helper != nil && !capabilities.isEmpty),"version":.number(1),"capabilities":.array(capabilities)])); return
         }
-        guard pending.count < 8, (["read","reply","link","tapback","typing.start","typing.stop"].contains(method) || Self.advancedMethods.contains(method)), !completed.contains(requestID), pending[requestID] == nil,
+        guard pending.count < configuration.maximumPending, (["read","reply","link","tapback","typing.start","typing.stop"].contains(method) || Self.advancedMethods.contains(method)), !completed.contains(requestID), pending[requestID] == nil,
               let helper, let embedded = clients[helper], !capabilities.isEmpty else {
             finish(requestID,worker:id,result:.object(["ok":.bool(false),"uncertain":.bool(false),"failure_code":.string("native_bridge_unavailable")])); return
         }
         pending[requestID] = id
         send(.object(["kind":.string("command"),"id":.string(requestID),"request":request]),to:embedded)
-        queue.asyncAfter(deadline:.now()+24) {
-            guard let worker = self.pending.removeValue(forKey:requestID) else { return }
+        queue.asyncAfter(deadline:.now()+configuration.commandDeadline) { [weak self] in
+            guard let self, let worker = self.pending.removeValue(forKey:requestID) else { return }
             self.finish(requestID,worker:worker,result:.object(["ok":.bool(false),"uncertain":.bool(true),"failure_code":.string("native_bridge_timeout")]))
         }
     }

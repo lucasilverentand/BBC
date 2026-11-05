@@ -3,9 +3,9 @@ import Darwin
 
 final class NativeOperationLock {
     private var fd: Int32 = -1
-    init(name: String) throws {
+    init(name: String, directory override: URL? = nil) throws {
         guard ["media.lock","automation.lock","native-session.lock"].contains(name) else { throw ActionFailure.invalid }
-        let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions",isDirectory:true)
+        let directory = override ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions",isDirectory:true)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
         fd = open(directory.appendingPathComponent(name).path,O_CREAT|O_RDWR|O_NOFOLLOW,0o600)
         guard fd >= 0 else { throw ActionFailure.unavailable }

@@ -88,5 +88,12 @@ final class LocalReaderTests: XCTestCase {
         XCTAssertEqual(typedRows.last?.object?["item_type"]?.numberValue, 3)
         XCTAssertEqual(typedRows.last?.object?["is_reaction"]?.bool, false, "A system row is not necessarily a reaction")
 
+        XCTAssertEqual(sqlite3_exec(connection, "UPDATE message SET thread_originator_guid='not-a-native-guid' WHERE guid='\(reply)'", nil, nil, nil), SQLITE_OK)
+        let malformed = try database.page(["chat_guid": .string("any;-;fixture@example.test")])
+        guard case .array(let malformedRows) = malformed.object?["messages"],
+              let malformedReply = malformedRows.first(where: { $0.object?["guid"]?.string == reply }) else { return XCTFail("Expected reply") }
+        XCTAssertEqual(malformedReply.object?["thread_root_guid"], .null, "Malformed originator must not invent a top-level thread")
+        XCTAssertEqual(malformedReply.object?["reply_to_guid"], .null)
+
     }
 }

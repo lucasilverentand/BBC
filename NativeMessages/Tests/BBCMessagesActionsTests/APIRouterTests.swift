@@ -10,6 +10,47 @@ import BBCClient
         let keys = try APIKeyStore(directory: directory), secret = try keys.create(name: "Fixture")
         try await run(keys, secret, directory)
     }
+    func testInvalidTypingIdentityDoesNotReserveAnOperation() async throws {
+        try await fixture { keys, secret, directory in
+            let operation = UUID()
+            let headers = ["authorization": "Bearer " + secret, "idempotency-key": operation.uuidString]
+            let router = APIRouter(keys: keys) { _ in XCTFail("Invalid typing must not dispatch"); return .null }
+            for path in ["/v1/typing/start", "/v1/typing/stop"] {
+                for _ in 0..<2 {
+                    let response = await router.handle(method: "POST", path: path, headers: headers, body: Data(#"{"typing_id":"invalid"}"#.utf8))
+                    XCTAssertEqual(response.status, 400)
+                }
+            }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("operation-\(keys.keys[0].id)-\(operation).json").path))
+        }
+    }
+
+    func testReceiptWriteFailureStillReturnsObservedResultAndDoesNotReplay() async throws {
+        try await fixture { keys, secret, directory in
+            let displaced = directory.appendingPathExtension("displaced")
+            defer {
+                if FileManager.default.fileExists(atPath: displaced.path) { try? FileManager.default.moveItem(at: displaced, to: directory) }
+            }
+            var calls = 0
+            let receipt: BBCJSONValue = .object(["ok": .bool(true), "guid": .string("fixture-confirmed")])
+            let router = APIRouter(keys: keys) { _ in
+                calls += 1
+                // Intent was written, but the store becomes unavailable during dispatch.
+                try FileManager.default.moveItem(at: directory, to: displaced)
+                return receipt
+            }
+            let headers = ["authorization": "Bearer " + secret, "idempotency-key": UUID().uuidString]
+            let first = await router.handle(method: "POST", path: "/v1/messages", headers: headers, body: Data("{}".utf8))
+            XCTAssertEqual(first.status, 200)
+            XCTAssertEqual(first.value, receipt)
+            try FileManager.default.moveItem(at: displaced, to: directory)
+            let retry = await router.handle(method: "POST", path: "/v1/messages", headers: headers, body: Data("{}".utf8))
+            XCTAssertEqual(retry.status, 409)
+            XCTAssertEqual(retry.value.object?["uncertain"]?.bool, true)
+            XCTAssertEqual(calls, 1)
+        }
+    }
+
     func testKeysPersistOnlyHashesAndRevocationSurvivesRestart() async throws {
         try await fixture { keys, secret, directory in
             XCTAssertNotNil(keys.authenticate(secret)); XCTAssertNil(keys.authenticate("wrong"))

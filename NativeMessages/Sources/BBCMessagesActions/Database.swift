@@ -61,7 +61,8 @@ final class MessagesDatabase {
     }
     func threadRoot(chat: String, message: String) throws -> String {
         try verify(chat: chat, message: message)
-        let raw = try rows("SELECT m.thread_originator_guid FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id WHERE c.guid=?1 AND m.guid=?2 LIMIT 2", [chat,message]).first?.first ?? ""
+        let values = try rows("SELECT m.thread_originator_guid FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id WHERE c.guid=?1 AND m.guid=?2 LIMIT 2", [chat,message])
+        guard values.count == 1, let raw = values.first?.first else { throw ActionFailure.invalid }
         let value = raw.isEmpty ? message : raw
         guard let guid = normalizedGUID(value) else { throw ActionFailure.invalid }
         return guid
@@ -74,6 +75,19 @@ final class MessagesDatabase {
             """,[chat,String(after),text]).filter { normalizedGUID($0[1]) == root }
         guard values.count <= 1 else { throw ActionFailure.uncertain }
         return values.first?.first
+    }
+    /// Confirm only the native acknowledgement's exact new message, never a text-derived candidate.
+    func confirmedReply(chat: String, root: String, text: String, sent: String, after: Int64) throws -> Bool {
+        guard UUID(uuidString: sent) != nil, UUID(uuidString: root) != nil else { throw ActionFailure.invalid }
+        let values = try rows("""
+            SELECT m.thread_originator_guid FROM message m
+            JOIN chat_message_join j ON j.message_id=m.ROWID JOIN chat c ON c.ROWID=j.chat_id
+            WHERE m.guid=?1 AND c.guid=?2 AND m.ROWID>CAST(?3 AS INTEGER)
+            AND m.is_from_me=1 AND m.service='iMessage' AND m.text=?4
+            AND m.is_sent=1 AND COALESCE(m.error,0)=0 LIMIT 2
+            """, [sent,chat,String(after),text])
+        guard values.count <= 1 else { throw ActionFailure.uncertain }
+        return values.count == 1 && normalizedGUID(values[0][0]) == root
     }
     func reaction(chat: String, message: String) throws -> Int? {
         try reactionValue(chat: chat, message: message).flatMap { NativeRequest.reactions.firstIndex(of: $0) }
@@ -171,7 +185,8 @@ struct NativeRequest: Decodable {
     var trace_id: String?
     struct Parameters: Decodable {
         let chat_guid: String
-        let message_guid: String?
+        var message_guid: String?
+        let reply_to: String?
         let reaction: String?
         let remove: Bool?
         let read_guids: [String]?
@@ -184,7 +199,12 @@ struct NativeRequest: Decodable {
     static let reactions = ["love", "like", "dislike", "laugh", "emphasis", "question"]
     static let beeperReactions = ["heart", "like", "dislike", "laugh", "emphasize", "question"]
     func validated() throws -> Parameters {
-        guard let params, ["tapback", "read", "read.status", "media.transcribe", "media.visual", "reply", "link", "typing.start"].contains(method), params.chat_guid.utf8.count <= 512,
+        guard var params else { throw ActionFailure.invalid }
+        if method == "reply", let alias = params.reply_to {
+            guard params.message_guid == nil || params.message_guid == alias else { throw ActionFailure.invalid }
+            params.message_guid = alias
+        }
+        guard ["tapback", "read", "read.status", "media.transcribe", "media.visual", "reply", "link", "typing.start"].contains(method), params.chat_guid.utf8.count <= 512,
               let guid = params.message_guid, UUID(uuidString: guid) != nil else { throw ActionFailure.invalid }
         if method == "tapback" { guard Self.reactions.contains(params.reaction ?? "") || EmojiTapback.valid(params.reaction ?? "") else { throw ActionFailure.invalid } }
         if ["media.transcribe", "media.visual"].contains(method) {

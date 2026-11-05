@@ -74,33 +74,7 @@ final class LocalVisualMediaTests: XCTestCase, @unchecked Sendable {
         do { _ = try await LocalVisualMedia.video(Data("not a movie".utf8)); XCTFail("Malformed video accepted") }
         catch { /* No decoder fallback or external request. */ }
     }
-    private func movie(seconds: Double) async throws -> Data {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appendingPathComponent("synthetic.mov")
-        let writer = try AVAssetWriter(outputURL: file, fileType: .mov)
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: 64, AVVideoHeightKey: 64])
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
-            kCVPixelBufferWidthKey as String: 64, kCVPixelBufferHeightKey as String: 64])
-        writer.add(input); XCTAssertTrue(writer.startWriting()); writer.startSession(atSourceTime: .zero)
-        for time in [0.0, seconds / 2] {
-            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(5)) }
-            var buffer: CVPixelBuffer?
-            XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 64, 64, kCVPixelFormatType_32ARGB, nil, &buffer), kCVReturnSuccess)
-            let pixels = try XCTUnwrap(buffer)
-            CVPixelBufferLockBaseAddress(pixels, [])
-            memset(CVPixelBufferGetBaseAddress(pixels), 127, CVPixelBufferGetDataSize(pixels))
-            CVPixelBufferUnlockBaseAddress(pixels, [])
-            XCTAssertTrue(adaptor.append(pixels, withPresentationTime: CMTime(seconds: time, preferredTimescale: 600)))
-        }
-        writer.endSession(atSourceTime: CMTime(seconds: seconds, preferredTimescale: 600))
-        input.markAsFinished(); await writer.finishWriting()
-        XCTAssertEqual(writer.status, .completed)
-        return try Data(contentsOf: file)
-    }
+    private func movie(seconds: Double) async throws -> Data { try await makeSyntheticMovie(seconds: seconds) }
     func testVideoUsesThreeBoundedSamplesAndDoesNotInventAudioOrContinuousCoverage() async throws {
         let media = try await LocalVisualMedia.video(movie(seconds: 2))
         XCTAssertEqual(media.kind, "video"); XCTAssertEqual(media.frames.count, 3)

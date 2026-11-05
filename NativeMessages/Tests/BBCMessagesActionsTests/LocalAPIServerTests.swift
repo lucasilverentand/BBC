@@ -11,14 +11,9 @@ import BBCClient
         let keys = try APIKeyStore(directory:directory), secret = try keys.create(name:"IP fixture", allowedClients:"10.0.0.0/8")
         var calls = 0
         let router = APIRouter(keys:keys) { _ in calls += 1; return .object(["version": .string("fixture")]) }
-        let port = UInt16.random(in:20000...45000)
-        let server = try LocalAPIServer(host:"127.0.0.1",port:port,router:router)
-        defer { server.stop() }
-        let ready = await withCheckedContinuation { continuation in
-            let once = ReadyOnce(continuation); server.start { once.finish($0) }
-        }
-        XCTAssertTrue(ready)
-        var request = URLRequest(url:URL(string:"http://127.0.0.1:\(port)/v1/status")!)
+        let (server, port, base) = try await startFixtureServer(router: router)
+        defer { server.stopAndDrain() }
+        var request = URLRequest(url:base.appendingPathComponent("v1/status"))
         request.setValue("Bearer "+secret,forHTTPHeaderField:"Authorization")
         request.setValue("10.0.0.1",forHTTPHeaderField:"X-Forwarded-For")
         request.setValue("for=10.0.0.1",forHTTPHeaderField:"Forwarded")
@@ -76,7 +71,7 @@ import BBCClient
         let remote = try keys.create(name: "Remote", allowedClients: "10.0.0.0/8", allowNetwork: true)
         var calls = 0
         let router = APIRouter(keys: keys) { _ in calls += 1; return .object([:]) }
-        let peer = NWEndpoint.hostPort(host: .ipv4(IPv4Address("10.2.3.4")!), port: 1234)
+        let peer = NWEndpoint.hostPort(host: .ipv4(try XCTUnwrap(IPv4Address("10.2.3.4"))), port: 1234)
         func request(_ secret: String, peer: NWEndpoint) async -> APIRouter.Response {
             await router.handle(method: "GET", path: "/v1/status", headers: ["authorization": "Bearer " + secret], body: Data(), peer: peer)
         }
@@ -84,7 +79,7 @@ import BBCClient
         XCTAssertEqual(denied.status, 403)
         let allowed = await request(remote, peer: peer)
         XCTAssertEqual(allowed.status, 200)
-        let outside = await request(remote, peer: .hostPort(host: .ipv4(IPv4Address("192.168.1.2")!), port: 1234))
+        let outside = await request(remote, peer: .hostPort(host: .ipv4(try XCTUnwrap(IPv4Address("192.168.1.2"))), port: 1234))
         XCTAssertEqual(outside.status, 403)
         let id = try XCTUnwrap(keys.authenticate(remote))
         try keys.update(id, access: .readOnly, allowedClients: "", allowNetwork: false, name: "Renamed")
@@ -124,20 +119,14 @@ import BBCClient
         let keys = try APIKeyStore(directory: directory), key = try keys.create(name: "HTTP fixture")
         var calls = 0
         let router = APIRouter(keys: keys) { _ in calls += 1; return .object(["version": .string("fixture")]) }
-        let port = UInt16.random(in: 20000...45000)
-        let server = try LocalAPIServer(host: "127.0.0.1", port: port, router: router)
-        defer { server.stop() }
-        let ready = await withCheckedContinuation { continuation in
-            let once = ReadyOnce(continuation)
-            server.start { once.finish($0) }
-        }
-        XCTAssertTrue(ready)
-        let url = URL(string: "http://127.0.0.1:\(port)/v1/status")!
+        let (server, port, base) = try await startFixtureServer(router: router)
+        defer { server.stopAndDrain() }
+        let url = base.appendingPathComponent("v1/status")
         let (_, rejected) = try await URLSession.shared.data(from: url)
         XCTAssertEqual((rejected as? HTTPURLResponse)?.statusCode, 401); XCTAssertEqual(calls, 0)
-        let response = try await BBCHTTPClient(baseURL: URL(string: "http://127.0.0.1:\(port)")!, apiKey: key).request(.object(["method": .string("status")]))
+        let response = try await BBCHTTPClient(baseURL: base, apiKey: key).request(.object(["method": .string("status")]))
         XCTAssertEqual(response.object?["version"]?.string, "fixture"); XCTAssertEqual(calls, 1)
-        let client = BBCHTTPClient(baseURL: URL(string: "http://127.0.0.1:\(port)")!, apiKey: key)
+        let client = BBCHTTPClient(baseURL: base, apiKey: key)
         let original = try RichMessagingTests.png() + Data(repeating: 0, count: 100_000)
         let upload = try await client.uploadMedia(original, filename: "photo.png")
         let id = try XCTUnwrap(upload.object?["media_id"]?.string)
@@ -147,10 +136,4 @@ import BBCClient
         XCTAssertEqual(download.object?["version"]?.string, "fixture"); XCTAssertEqual(calls, 2)
 
     }
-}
-private final class ReadyOnce: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Bool, Never>?
-    init(_ continuation: CheckedContinuation<Bool, Never>) { self.continuation = continuation }
-    func finish(_ value: Bool) { lock.lock(); let result = continuation; continuation = nil; lock.unlock(); result?.resume(returning: value) }
 }

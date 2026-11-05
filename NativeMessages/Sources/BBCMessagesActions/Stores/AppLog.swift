@@ -15,9 +15,12 @@ struct AppLogEntry: Codable, Identifiable {
     private(set) var entries: [AppLogEntry] = []
     private(set) var storageError = false
     @ObservationIgnored private let file: URL
+    @ObservationIgnored private let writingOptions: Data.WritingOptions
 
-    init(directory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Blue Bubble Club")) {
+    init(directory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Blue Bubble Club"),
+         writingOptions: Data.WritingOptions = [.atomic, .completeFileProtectionUnlessOpen]) {
         file = directory.appendingPathComponent("activity-log.json")
+        self.writingOptions = writingOptions
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             if FileManager.default.fileExists(atPath: file.path) {
@@ -40,7 +43,7 @@ struct AppLogEntry: Codable, Identifiable {
 
     private func save() {
         do {
-            try JSONEncoder().encode(entries).write(to: file, options: [.atomic, .completeFileProtectionUnlessOpen])
+            try JSONEncoder().encode(entries).write(to: file, options: writingOptions)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
             storageError = false
         } catch { storageError = true }

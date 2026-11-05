@@ -4,6 +4,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-run}"
 APP_NAME=BlueBubbleClub
 BUNDLE="$ROOT/dist/Blue Bubble Club.app"
+BBC_VERSION="$(/usr/bin/ruby "$ROOT/script/version.rb" version)"
+BBC_BUILD="$(/usr/bin/ruby "$ROOT/script/version.rb" build)"
+BBC_CONFIG="${BBC_CONFIG:-debug}"
 # Machine-specific signing selection stays outside the repository.
 if [[ -f "$ROOT/Config/LocalSigning.env" ]]; then source "$ROOT/Config/LocalSigning.env"; fi
 if [[ -z "${BBC_SIGNING_IDENTITY:-}" ]]; then
@@ -13,7 +16,7 @@ fi
 if [[ "$MODE" != build ]]; then pkill -x "$APP_NAME" >/dev/null 2>&1 || true; fi
 bash "$ROOT/script/prepare_native.sh"
 bash "$ROOT/script/prepare_bridge.sh"
-BIN="$(swift build --package-path "$ROOT/NativeMessages" --show-bin-path)"
+BIN="$(swift build --package-path "$ROOT/NativeMessages" -c "$BBC_CONFIG" --show-bin-path)"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 mkdir -p "$BUNDLE/Contents/Frameworks"
 cp "$ROOT/build/NativeBridge/BBCMessagesBridge.dylib" "$BUNDLE/Contents/Frameworks/"
@@ -39,14 +42,16 @@ cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleIconName</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>VERSION</string>
+<key>CFBundleVersion</key><string>BUILD</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>LSUIElement</key><true/>
 <key>NSAppleEventsUsageDescription</key><string>Blue Bubble Club sends messages through your local Messages account when an authorized API client requests it.</string>
 </dict></plist>
 PLIST
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BBC_VERSION" "$BUNDLE/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BBC_BUILD" "$BUNDLE/Contents/Info.plist"
 codesign --force --sign "$BBC_SIGNING_IDENTITY" --options runtime --entitlements "$ROOT/Config/BBCMessagesActions.entitlements" "$BUNDLE"
 codesign --verify --strict --deep "$BUNDLE"
 case "$MODE" in

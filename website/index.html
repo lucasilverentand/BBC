@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Blue Bubble Club is an open-source, self-hosted iMessage API that runs as a menu bar app on your own Mac. Send messages, threaded replies, Tapbacks and media over a local HTTP API.">
+  <meta name="theme-color" content="#fbfcfe" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+  <meta property="og:title" content="Blue Bubble Club: a self-hosted iMessage API for your Mac">
+  <meta property="og:description" content="An open-source Mac app with an embedded HTTP API for native iMessage threads, Tapbacks, media and webhooks. MIT licensed.">
+  <meta property="og:type" content="website">
+  <title>Blue Bubble Club: a self-hosted iMessage API for your Mac</title>
+  <link rel="icon" href="assets/app-icon.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top" aria-label="Blue Bubble Club home">
+        <img src="assets/app-icon.png" width="32" height="32" alt="">
+        <span>Blue Bubble Club</span>
+      </a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a class="nav-secondary" href="#how-it-works">How it works</a>
+        <a class="nav-secondary" href="#features">Features</a>
+        <a class="nav-secondary" href="#api">API</a>
+        <a href="https://github.com/lucasilverentand/BBC/tree/main/docs">Docs</a>
+        <a class="nav-github" href="https://github.com/lucasilverentand/BBC">
+          <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span>GitHub</span>
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="hero-meta">
+            <span class="pill">Open source</span>
+            <span>MIT license</span>
+            <span aria-hidden="true">·</span>
+            <span>Swift</span>
+            <span aria-hidden="true">·</span>
+            <span>macOS 26+</span>
+          </p>
+          <h1 id="hero-title">A self-hosted iMessage API that runs on your&nbsp;Mac.</h1>
+          <p class="lead">Blue Bubble Club is a small menu bar app with an embedded HTTP API. It works with your signed-in Messages session to send, reply, react and observe without a separate server, cloud relay or UI automation.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#get-started">Get started</a>
+            <a class="button button-secondary" href="https://github.com/lucasilverentand/BBC">
+              <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+              View source
+            </a>
+          </div>
+          <div class="snippet" aria-label="Build from source">
+            <div class="snippet-bar"><span>Build from source</span><button class="copy-button" type="button" data-copy="install-snippet" aria-label="Copy build commands" hidden>Copy</button></div>
+            <pre><code id="install-snippet"><span class="c-prompt" aria-hidden="true">$ </span>git clone https://github.com/lucasilverentand/BBC.git
+<span class="c-prompt" aria-hidden="true">$ </span>cd BBC
+<span class="c-prompt" aria-hidden="true">$ </span>./script/build_and_run.sh</code></pre>
+          </div>
+          <p class="fine">Requires Xcode 27.2+ and an Apple Development signing identity. Build and sign the app locally using the setup guide.</p>
+        </div>
+
+        <figure class="anatomy" aria-labelledby="anatomy-caption">
+          <div class="anatomy-head">
+            <span class="anatomy-title">Thread anatomy</span>
+            <span class="tag">Illustration</span>
+          </div>
+          <ol class="anatomy-rows">
+            <li>
+              <div class="bubble bubble-in">Can you send the build notes?<span class="tapback" aria-hidden="true">♥</span></div>
+              <div class="route"><code>webhook</code><span>incoming message event</span></div>
+            </li>
+            <li>
+              <div class="bubble-group">
+                <div class="quote">Replying to “Can you send the build notes?”</div>
+                <div class="bubble bubble-out">On it, attaching them now.</div>
+              </div>
+              <div class="route"><code>POST /v1/replies</code><span>threaded to the exact message</span></div>
+            </li>
+            <li>
+              <div class="bubble-media" aria-hidden="true"><span></span></div>
+              <div class="route"><code>POST /v1/media/upload</code><span>then send by <code class="inline">media_id</code></span></div>
+            </li>
+            <li>
+              <div class="tap-note" aria-hidden="true"><span class="tapback tapback-inline">♥</span> on their message</div>
+              <div class="route"><code>POST /v1/tapbacks</code><span>classic reaction or custom emoji</span></div>
+            </li>
+            <li>
+              <div class="typing" aria-hidden="true"><i></i><i></i><i></i></div>
+              <div class="route"><code>POST /v1/typing/start</code><span>stop with its <code class="inline">typing_id</code></span></div>
+            </li>
+          </ol>
+          <figcaption id="anatomy-caption">How API routes map to parts of a direct chat. This is a drawing, not a screenshot of BBC or Messages.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="how-it-works" aria-labelledby="how-title">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="kicker">How it works</p>
+          <h2 id="how-title">One local app. No server stack.</h2>
+          <p>BBC runs in the macOS login that is signed into Messages. A single Swift app hosts the API, manages keys and receipts, and talks to its own embedded native bridge.</p>
+        </div>
+        <ol class="flow" aria-label="Request path">
+          <li class="flow-step">
+            <span class="flow-index">01</span>
+            <h3>Your client</h3>
+            <p>A bot, script or service sends HTTP with a Bearer key and an <code class="inline">Idempotency-Key</code> UUID.</p>
+            <p class="flow-detail">curl · any HTTP client · <a href="https://github.com/lucasilverentand/BBC/tree/main/Sources/BBCClient">Swift SDK</a></p>
+          </li>
+          <li class="flow-step flow-step-accent">
+            <span class="flow-index">02</span>
+            <h3>Blue Bubble Club</h3>
+            <p>A menu bar app with an embedded API on port 7861 by default. It checks the key and client address and records each operation so a retry returns the saved receipt.</p>
+            <p class="flow-detail">Keys · access rules · receipts · logs</p>
+          </li>
+          <li class="flow-step">
+            <span class="flow-index">03</span>
+            <h3>Messages on your Mac</h3>
+            <p>Sends go through your signed-in account. History and webhooks come from the local Messages database.</p>
+            <p class="flow-detail">Your account · your hardware</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section section-tint" id="features" aria-labelledby="features-title">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="kicker">Capabilities</p>
+          <h2 id="features-title">Enable only what you need.</h2>
+          <p>Features are grouped by the access and host setup they require. Start read-only and add more later.</p>
+        </div>
+        <div class="tiers">
+          <article class="tier">
+            <header>
+              <h3>Observe</h3>
+              <p class="tier-req"><span>Read-only key</span><span>Full Disk Access</span></p>
+            </header>
+            <ul>
+              <li><strong>Message history</strong> with incremental cursors</li>
+              <li><strong>Search</strong> by text, conversation and date</li>
+              <li><strong>Webhooks</strong> for incoming messages and observed updates</li>
+              <li><strong>Attachment downloads</strong>, including ranged reads</li>
+              <li><strong>Local media processing</strong>, with optional on-device transcription</li>
+            </ul>
+          </article>
+          <article class="tier">
+            <header>
+              <h3>Send</h3>
+              <p class="tier-req"><span>Full-access key</span><span>+ Messages Automation</span></p>
+            </header>
+            <ul>
+              <li><strong>Text messages</strong> over iMessage, with SMS fallback disabled</li>
+              <li><strong>Photos, video and audio</strong> from uploaded media</li>
+              <li><strong>Scheduled sends</strong> you can update and cancel</li>
+              <li><strong>Operation receipts</strong> that prevent duplicate sends</li>
+            </ul>
+          </article>
+          <article class="tier tier-native">
+            <header>
+              <h3>Native</h3>
+              <p class="tier-req"><span>Full-access key</span><span>+ native messaging setup</span></p>
+            </header>
+            <ul>
+              <li><strong>Threaded replies</strong> and <strong>Tapbacks</strong>, including custom emoji</li>
+              <li><strong>Typing indicators</strong> and <strong>mark read</strong></li>
+              <li><strong>Rich links</strong> with native previews</li>
+              <li><strong>Groups</strong>: create, rename, set photo, add, remove, leave</li>
+              <li><strong>Edit, unsend</strong> and <strong>multipart</strong> messages with effects</li>
+              <li><strong>iMessage availability</strong> checks</li>
+            </ul>
+          </article>
+        </div>
+        <p class="note">Replies, Tapbacks, read and typing currently target direct chats. Native capabilities vary with macOS, and passing tests do not establish live compatibility on your host. <code class="inline">GET /v1/status</code> reports what is available. <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/native-features.md">Read the capability limits</a>.</p>
+      </div>
+    </section>
+
+    <section class="section" id="api" aria-labelledby="api-title">
+      <div class="wrap api-grid">
+        <div class="api-copy">
+          <p class="kicker">API</p>
+          <h2 id="api-title">Plain HTTP and JSON, with explicit receipts.</h2>
+          <p>Every route requires a Bearer key. Every mutation requires an <code class="inline">Idempotency-Key</code> UUID that you save before dispatch.</p>
+          <dl class="facts">
+            <div><dt>Same UUID and body</dt><dd>Returns the saved receipt. Nothing is sent twice.</dd></div>
+            <div><dt>Same UUID, changed body</dt><dd>Rejected with HTTP 409.</dd></div>
+            <div><dt>Lost response</dt><dd>Fetch <code class="inline">GET /v1/operations/&lt;uuid&gt;</code> and reconcile. Never resend under a new UUID.</dd></div>
+          </dl>
+          <a class="arrow-link" href="https://github.com/lucasilverentand/BBC/blob/main/docs/api.md">Full API reference <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="api-side">
+          <div class="code-window">
+            <div class="code-bar">
+              <span class="code-file">send-message.sh</span>
+              <button class="copy-button" type="button" data-copy="api-example" aria-label="Copy API example" hidden>Copy</button>
+            </div>
+            <pre><code id="api-example"><span class="c-cmd">curl</span> http://127.0.0.1:7861/v1/messages \
+  -H <span class="c-str">"Authorization: Bearer $BBC_API_KEY"</span> \
+  -H <span class="c-str">"Idempotency-Key: $OPERATION_UUID"</span> \
+  -H <span class="c-str">'Content-Type: application/json'</span> \
+  -d <span class="c-str">'{"to":"+15555550123","text":"Hello from Blue Bubble Club"}'</span></code></pre>
+          </div>
+          <div class="routes" role="region" aria-labelledby="routes-title" tabindex="0">
+            <p class="routes-title" id="routes-title">Selected routes</p>
+            <table>
+              <tbody>
+                <tr><th scope="row"><code>GET /v1/status</code></th><td>Permissions, key access and available methods</td></tr>
+                <tr><th scope="row"><code>POST /v1/messages</code></th><td>Send text or uploaded media</td></tr>
+                <tr><th scope="row"><code>POST /v1/messages/after</code></th><td>Incremental history from a row cursor</td></tr>
+                <tr><th scope="row"><code>POST /v1/messages/search</code></th><td>Search by text, conversation and date</td></tr>
+                <tr><th scope="row"><code>POST /v1/replies</code></th><td>Threaded reply to an exact message</td></tr>
+                <tr><th scope="row"><code>POST /v1/tapbacks</code></th><td>Add or remove a reaction</td></tr>
+                <tr><th scope="row"><code>POST /v1/webhooks/register</code></th><td>Subscribe to incoming events</td></tr>
+                <tr><th scope="row"><code>POST /v1/schedules/create</code></th><td>Queue a scheduled send</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <p class="sr-only" id="copy-status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="section section-tint" id="security" aria-labelledby="security-title">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="kicker">Boundaries</p>
+          <h2 id="security-title">Explicit about access and failure.</h2>
+          <p>BBC is designed to fail visibly rather than guess. These are design rules in the codebase, not promises about third-party behaviour.</p>
+        </div>
+        <ul class="principles">
+          <li><h3>Local by default</h3><p>New keys accept loopback connections only. Network access, IP and CIDR allowlists, and read-only or full access are set per key. Forwarded headers never grant access.</p></li>
+          <li><h3>Keys you can revoke</h3><p>Secrets are shown once and stored only as hashes. Rotate or revoke a key in the app; the API cannot create keys.</p></li>
+          <li><h3>No UI automation</h3><p>BBC never clicks, types into the composer or takes over the mouse or keyboard. Unavailable native features fail instead of falling back to the UI.</p></li>
+          <li><h3>No automatic retries</h3><p>An uncertain mutation stays uncertain until you reconcile it. BBC does not dispatch it again on its own.</p></li>
+        </ul>
+        <aside class="callout" aria-labelledby="callout-title">
+          <h3 id="callout-title">Native features reduce host protections</h3>
+          <p>Replies, Tapbacks, typing, groups and the other native features currently require you to disable SIP and system library validation yourself. These changes affect every user on that macOS installation. BBC reports the requirement but never changes these settings. Read-only access and ordinary sends work without them.</p>
+          <a class="arrow-link" href="https://github.com/lucasilverentand/BBC/blob/main/docs/setup.md#native-messaging">Native messaging setup and rollback <span aria-hidden="true">→</span></a>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section" id="get-started" aria-labelledby="start-title">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="kicker">Get started</p>
+          <h2 id="start-title">From clone to first request.</h2>
+          <p>You need a Mac on macOS 26 or later, Xcode 27.2+ and an Apple Development signing identity. The <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/setup.md">setup guide</a> has the full steps.</p>
+        </div>
+        <ol class="steps">
+          <li>
+            <h3>Build and sign</h3>
+            <p>Clone the repository and run <code class="inline">./script/build_and_run.sh</code>. It builds, packages and signs the app with your identity.</p>
+          </li>
+          <li>
+            <h3>Grant permissions</h3>
+            <p>Use the Setup checklist to grant Full Disk Access, plus Messages Automation if you want to send. A floating helper sits next to System Settings.</p>
+          </li>
+          <li>
+            <h3>Create a key</h3>
+            <p>In <strong>API Keys</strong>, create a named key. New keys are read-only and local-only; choose <strong>Full access</strong> for sending.</p>
+          </li>
+          <li>
+            <h3>Start the API</h3>
+            <p>Select <strong>Start API</strong>, then call <code class="inline">GET /v1/status</code> to confirm your key’s access and the available methods.</p>
+          </li>
+        </ol>
+        <div class="start-actions">
+          <a class="button button-primary" href="https://github.com/lucasilverentand/BBC/blob/main/docs/setup.md">Read the setup guide</a>
+          <a class="button button-secondary" href="https://github.com/lucasilverentand/BBC/blob/main/docs/api.md">API reference</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-tint" id="contribute" aria-labelledby="oss-title">
+      <div class="wrap oss-grid">
+        <div class="oss-copy">
+          <img class="oss-icon" src="assets/app-icon.png" width="64" height="64" alt="Blue Bubble Club app icon" loading="lazy">
+          <p class="kicker">Open source</p>
+          <h2 id="oss-title">Built in the open. MIT licensed.</h2>
+          <p>Contributions don’t need an iMessage account. The portable SDK tests run on Linux or macOS, and the native fixture suites use synthetic data on any Mac toolchain without changing host protections.</p>
+          <div class="snippet snippet-compact">
+            <div class="snippet-bar"><span>Run the portable tests</span><button class="copy-button" type="button" data-copy="test-snippet" aria-label="Copy test command" hidden>Copy</button></div>
+            <pre><code id="test-snippet"><span class="c-prompt" aria-hidden="true">$ </span>python3 script/test_swift.py .</code></pre>
+          </div>
+          <a class="arrow-link" href="https://github.com/lucasilverentand/BBC/blob/main/docs/testing.md">Testing without iMessage <span aria-hidden="true">→</span></a>
+        </div>
+        <nav class="doc-links" aria-label="Documentation">
+          <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/setup.md"><strong>Setup and rollback</strong><span>Build, permissions, native host setup</span></a>
+          <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/api.md"><strong>API guide</strong><span>Routes, sending, media, receipts</span></a>
+          <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/api-access.md"><strong>Access controls</strong><span>Per-key network and client rules</span></a>
+          <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/native-features.md"><strong>Native features</strong><span>Groups, edit/unsend, multipart</span></a>
+          <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/events-and-search.md"><strong>Webhooks and search</strong><span>Events and history queries</span></a>
+          <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/scheduling.md"><strong>Scheduled sends</strong><span>Create, update, cancel</span></a>
+          <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/protocol.md"><strong>Protocol</strong><span>Local transport and workers</span></a>
+          <a href="https://github.com/lucasilverentand/BBC/blob/main/docs/native-bridge.md"><strong>Native bridge</strong><span>Architecture and boundaries</span></a>
+        </nav>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <a class="brand" href="#top"><img src="assets/app-icon.png" width="24" height="24" alt=""><span>Blue Bubble Club</span></a>
+      <nav aria-label="Footer navigation">
+        <a href="https://github.com/lucasilverentand/BBC">GitHub</a>
+        <a href="https://github.com/lucasilverentand/BBC/tree/main/docs">Docs</a>
+        <a href="https://github.com/lucasilverentand/BBC/issues">Issues</a>
+        <a href="https://github.com/lucasilverentand/BBC/blob/main/LICENSE">MIT license</a>
+        <a href="https://github.com/lucasilverentand/BBC/blob/main/NOTICE">Notices</a>
+      </nav>
+      <p class="disclaimer">An independent open-source project, not affiliated with Apple. iMessage is a trademark of Apple Inc.</p>
+    </div>
+  </footer>
+</body>
+</html>

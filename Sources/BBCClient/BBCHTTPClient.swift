@@ -1,31 +1,35 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Connect to the API hosted by the Blue Bubble Club Mac app.
 public struct BBCHTTPClient: Sendable {
     public let baseURL: URL
     private let apiKey: String
+    static let routes: [String: String] = [
+        "status":"status", "send":"messages", "reply":"replies", "link":"links", "media.download":"media/download",
+        "messages.after":"messages/after", "messages.status":"messages/status", "messages.search":"messages/search",
+        "messages.edit":"messages/edit", "messages.unsend":"messages/unsend", "messages.multipart":"messages/multipart",
+        "availability":"availability", "groups.create":"groups/create", "groups.add":"groups/add", "groups.remove":"groups/remove",
+        "groups.name":"groups/name", "groups.photo":"groups/photo", "groups.leave":"groups/leave",
+        "tapback":"tapbacks", "read":"read", "read.status":"read/status", "typing.start":"typing/start", "typing.stop":"typing/stop",
+        "media.visual":"media/visual", "media.transcribe":"media/transcribe",
+        "webhooks.register":"webhooks/register", "webhooks.list":"webhooks/list", "webhooks.remove":"webhooks/remove",
+        "schedule.create":"schedules/create", "schedule.update":"schedules/update", "schedule.cancel":"schedules/cancel",
+        "schedule.get":"schedules/get", "schedule.list":"schedules/list"
+    ]
+    static let observationalMethods: Set<String> = ["status","messages.after","messages.status","messages.search","availability","media.download","read.status","media.visual","media.transcribe","webhooks.list","schedule.get","schedule.list"]
     public init(baseURL: URL, apiKey: String) { self.baseURL = baseURL; self.apiKey = apiKey }
     public func request(_ payload: BBCJSONValue, operationID: UUID? = nil) async throws -> BBCJSONValue {
         guard let method = payload.object?["method"]?.string else { throw BBCError.invalid("A method is required.") }
-        let routes = [
-            "status":"status", "send":"messages", "reply":"replies", "link":"links", "media.download":"media/download",
-            "messages.after":"messages/after", "messages.status":"messages/status", "messages.search":"messages/search",
-            "messages.edit":"messages/edit", "messages.unsend":"messages/unsend", "messages.multipart":"messages/multipart",
-            "availability":"availability", "groups.create":"groups/create", "groups.add":"groups/add", "groups.remove":"groups/remove",
-            "groups.name":"groups/name", "groups.photo":"groups/photo", "groups.leave":"groups/leave",
-            "tapback":"tapbacks", "read":"read", "read.status":"read/status", "typing.start":"typing/start", "typing.stop":"typing/stop",
-            "media.visual":"media/visual", "media.transcribe":"media/transcribe",
-            "webhooks.register":"webhooks/register", "webhooks.list":"webhooks/list", "webhooks.remove":"webhooks/remove",
-            "schedule.create":"schedules/create", "schedule.update":"schedules/update", "schedule.cancel":"schedules/cancel",
-            "schedule.get":"schedules/get", "schedule.list":"schedules/list"
-        ]
         let routedMethod = method == "send" && payload.object?["params"]?.object?["reply_to"] != nil ? "reply" : method
-        guard let route = routes[routedMethod], ["http", "https"].contains(baseURL.scheme?.lowercased() ?? ""), baseURL.host != nil, baseURL.user == nil, baseURL.password == nil, baseURL.query == nil, baseURL.fragment == nil else { throw BBCError.invalid("Invalid BBC endpoint or method.") }
+        guard let route = Self.routes[routedMethod], ["http", "https"].contains(baseURL.scheme?.lowercased() ?? ""), baseURL.host != nil, baseURL.user == nil, baseURL.password == nil, baseURL.query == nil, baseURL.fragment == nil else { throw BBCError.invalid("Invalid BBC endpoint or method.") }
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/" + route))
         request.httpMethod = method == "status" ? "GET" : "POST"
         request.setValue("Bearer " + apiKey, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let mutating = !["status","messages.after","messages.status","messages.search","availability","media.download","read.status","media.visual","media.transcribe","webhooks.list","schedule.get","schedule.list"].contains(method)
+        let mutating = !Self.observationalMethods.contains(method)
         if mutating {
             guard let operationID else { throw BBCError.invalid("Persist an operation UUID before dispatching a mutation.") }
             request.setValue(operationID.uuidString, forHTTPHeaderField: "Idempotency-Key")

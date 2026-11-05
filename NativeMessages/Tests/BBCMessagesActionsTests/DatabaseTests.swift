@@ -25,6 +25,21 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(sqlite3_exec(db, setup, nil, nil, nil), SQLITE_OK)
         try body(MessagesDatabase(url: url), db!)
     }
+    func testReplyAliasResolvesExactMessageAndRejectsConflicts() throws {
+        func request(_ fields: [String: String]) throws -> NativeRequest {
+            var params: [String: Any] = fields
+            params["chat_guid"] = chat
+            params["text"] = "fixture reply"
+            params["read_guids"] = [guid]
+            return try JSONDecoder().decode(NativeRequest.self, from: JSONSerialization.data(withJSONObject: ["method": "reply", "params": params]))
+        }
+        XCTAssertEqual(try request(["reply_to": guid]).validated().message_guid, guid)
+        XCTAssertEqual(try request(["message_guid": guid]).validated().message_guid, guid)
+        XCTAssertEqual(try request(["reply_to": guid, "message_guid": guid]).validated().message_guid, guid)
+        XCTAssertThrowsError(try request(["reply_to": guid, "message_guid": UUID().uuidString]).validated())
+        XCTAssertThrowsError(try request(["reply_to": "latest"]).validated())
+    }
+
     func testNativeReplyConfirmationRequiresExactChatRootTextAndNewSentRow() throws {
         try fixture { database, db in
             XCTAssertEqual(sqlite3_exec(db,"ALTER TABLE message ADD COLUMN thread_originator_guid TEXT; ALTER TABLE message ADD COLUMN text TEXT; ALTER TABLE message ADD COLUMN is_sent INTEGER; ALTER TABLE message ADD COLUMN error INTEGER",nil,nil,nil),SQLITE_OK)
@@ -43,6 +58,37 @@ final class DatabaseTests: XCTestCase {
             XCTAssertThrowsError(try database.confirmedReply(chat:chat,root:guid,text:"answer",after:before))
         }
     }
+    func testExactAcknowledgedReplyIgnoresOtherSameTextMessagesButRejectsWrongEvidence() throws {
+        try fixture { database, db in
+            XCTAssertEqual(sqlite3_exec(db,"ALTER TABLE message ADD COLUMN thread_originator_guid TEXT; ALTER TABLE message ADD COLUMN text TEXT; ALTER TABLE message ADD COLUMN is_sent INTEGER; ALTER TABLE message ADD COLUMN error INTEGER",nil,nil,nil),SQLITE_OK)
+            let before = try database.maximumRowID()
+            let sent = "22222222-2222-4222-8222-222222222222", unrelated = "33333333-3333-4333-8333-333333333333"
+            func insert(_ id: String) {
+                XCTAssertEqual(sqlite3_exec(db,"INSERT INTO message(guid,service,is_from_me,is_read,thread_originator_guid,text,is_sent,error) VALUES('\(id)','iMessage',1,1,'p:3/\(guid)','answer',1,0); INSERT INTO chat_message_join VALUES(1,last_insert_rowid())",nil,nil,nil),SQLITE_OK)
+            }
+            insert(unrelated); insert(sent)
+            XCTAssertTrue(try database.confirmedReply(chat:chat,root:guid,text:"answer",sent:sent,after:before))
+            XCTAssertFalse(try database.confirmedReply(chat:chat,root:guid,text:"wrong",sent:sent,after:before))
+            XCTAssertFalse(try database.confirmedReply(chat:chat,root:unrelated,text:"answer",sent:sent,after:before))
+            XCTAssertFalse(try database.confirmedReply(chat:"any;-;other@example.test",root:guid,text:"answer",sent:sent,after:before))
+            XCTAssertFalse(try database.confirmedReply(chat:chat,root:guid,text:"answer",sent:sent,after:try database.maximumRowID()))
+            XCTAssertFalse(try database.confirmedReply(chat:chat,root:guid,text:"answer",sent:UUID().uuidString,after:before))
+            for change in ["is_from_me=0", "service='SMS'", "is_sent=0", "error=1"] {
+                XCTAssertEqual(sqlite3_exec(db,"UPDATE message SET \(change) WHERE guid='\(sent)'",nil,nil,nil),SQLITE_OK)
+                XCTAssertFalse(try database.confirmedReply(chat:chat,root:guid,text:"answer",sent:sent,after:before),change)
+                XCTAssertEqual(sqlite3_exec(db,"UPDATE message SET is_from_me=1,service='iMessage',is_sent=1,error=0 WHERE guid='\(sent)'",nil,nil,nil),SQLITE_OK)
+            }
+            insert(sent)
+            XCTAssertThrowsError(try database.confirmedReply(chat:chat,root:guid,text:"answer",sent:sent,after:before))
+        }
+    }
+    func testMalformedThreadRootRejectsPreparation() throws {
+        try fixture { database, db in
+            XCTAssertEqual(sqlite3_exec(db,"ALTER TABLE message ADD COLUMN thread_originator_guid TEXT; UPDATE message SET thread_originator_guid='p:bad/root'",nil,nil,nil),SQLITE_OK)
+            XCTAssertThrowsError(try database.threadRoot(chat:chat,message:guid))
+        }
+    }
+
     func testReactionReferenceUsesExactChatAndOptionalBalloonColumn() throws {
         try fixture { database,db in
             XCTAssertEqual(try database.reactionReference(chat:chat,message:guid),"p:0/"+guid)
