@@ -13,7 +13,7 @@ jobs:
     env:
       BBC_TEST_TIMEOUT_SECONDS: 480
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install fixture and SQLite dependencies
         run: apt-get update && apt-get install -y --no-install-recommends python3 libsqlite3-dev
       - run: python3 -m unittest discover -s script -p 'test_*.py'
@@ -31,7 +31,7 @@ jobs:
     env:
       BBC_TEST_TIMEOUT_SECONDS: 480
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 -m unittest discover -s script -p 'test_*.py'
       - run: /usr/bin/ruby script/test_release.rb
       - run: python3 script/test_swift.py . --min-tests 25 --log build/test-logs/sdk.log
@@ -49,7 +49,7 @@ jobs:
       BBC_TEST_TIMEOUT_SECONDS: 600
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify unsigned release build, suites, bridge ABI and icon
