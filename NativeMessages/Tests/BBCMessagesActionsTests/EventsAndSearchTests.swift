@@ -206,6 +206,60 @@ final class EventsAndSearchTests: XCTestCase {
         XCTAssertTrue(restarted.state.deliveries.isEmpty)
         XCTAssertEqual(restarted.state.highWater,1)
     }
+    func testSourceIdentityIgnoresDeviceRenumbering() {
+        XCTAssertTrue(WebhookService.sameSource("16777232:41714:1793909104:453085147","16777230:41714:1793909104:453085147"))
+        XCTAssertFalse(WebhookService.sameSource("16777232:41714:1793909104:453085147","16777232:41715:1793909104:453085147"))
+        XCTAssertFalse(WebhookService.sameSource("16777232:41714:1793909104:453085147","16777232:41714:1793909105:453085147"))
+        XCTAssertFalse(WebhookService.sameSource("16777232:41714:1793909104:453085147","16777232:41714:1793909104:453085148"))
+        XCTAssertFalse(WebhookService.sameSource("malformed","16777232:41714:1793909104:453085147"))
+    }
+    /// Rewrites the stored identity as a reboot that renumbered the volume, or a replaced file, would leave it.
+    private func rewriteStoredIdentity(in directory: URL, component: Int) throws {
+        let file = directory.appendingPathComponent("webhooks.json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:file)) as? [String:Any])
+        var parts = try XCTUnwrap(object["databaseIdentity"] as? String).split(separator:":").map(String.init)
+        parts[component] = String(Int(parts[component])! + 1)
+        object["databaseIdentity"] = parts.joined(separator:":")
+        try JSONSerialization.data(withJSONObject:object).write(to:file)
+        try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path)
+    }
+    @MainActor func testRebootDeviceRenumberingKeepsWebhooksWatching() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        insert(connection)
+        let keys = try APIKeyStore(directory:directory), secret = try keys.create(name:"fixture")
+        let keyID = try XCTUnwrap(keys.authenticate(secret))
+        var service: WebhookService? = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        _ = try await service!.handle(method:"webhooks.register",params:["url":.string("https://fixture.invalid/events")],keyID:keyID)
+        await service!.tick()
+        service = nil
+        try rewriteStoredIdentity(in:directory,component:0)
+        let restarted = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        insert(connection,guid:"22222222-2222-4222-8222-222222222222")
+        await restarted.tick()
+        XCTAssertEqual(restarted.observation,"watching")
+        XCTAssertNil(restarted.state.databaseChanged)
+        XCTAssertEqual(restarted.state.deliveries.count,1)
+    }
+    @MainActor func testChangedInodeStillLatches() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        insert(connection)
+        let keys = try APIKeyStore(directory:directory), secret = try keys.create(name:"fixture")
+        let keyID = try XCTUnwrap(keys.authenticate(secret))
+        var service: WebhookService? = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        _ = try await service!.handle(method:"webhooks.register",params:["url":.string("https://fixture.invalid/events")],keyID:keyID)
+        await service!.tick()
+        service = nil
+        try rewriteStoredIdentity(in:directory,component:1)
+        let restarted = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        insert(connection,guid:"22222222-2222-4222-8222-222222222222")
+        await restarted.tick()
+        XCTAssertEqual(restarted.observation,"database_changed")
+        XCTAssertTrue(restarted.state.deliveries.isEmpty)
+    }
     @MainActor func testUnchangedRevisitAdvancesInMemoryWithoutRewritingSnapshotFile() async throws {
         let (url,connection) = try fixture()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

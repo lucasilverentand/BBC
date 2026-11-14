@@ -94,7 +94,7 @@ struct WebhookSnapshot: Sendable {
             let identity = try sourceIdentity()
             let database = try MessagesDatabase(url:databaseURL)
             let maximum = try database.maximumRowID()
-            guard try sourceIdentity() == identity else { throw ActionFailure.unavailable }
+            guard Self.sameSource(identity,try sourceIdentity()) else { throw ActionFailure.unavailable }
             var next = state
             if next.subscriptions.isEmpty { resetObservation(in:&next) }
             try bindSource(identity,maximum:maximum,in:&next)
@@ -168,7 +168,7 @@ struct WebhookSnapshot: Sendable {
                 next.revisitChat = snapshot.payload.object?["chat_guid"]?.string ?? ""
             }
             if revisited.count < 100 { next.revisit = 0; next.revisitChat = "" }
-            if try sourceIdentity() != identity {
+            if !Self.sameSource(identity,try sourceIdentity()) {
                 // Discard events produced by a scan straddling file replacement.
                 var blocked = state; blocked.databaseChanged = true; try save(blocked)
                 throw ObservationFailure.databaseChanged
@@ -250,8 +250,16 @@ struct WebhookSnapshot: Sendable {
         guard stat(databaseURL.path,&info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw ActionFailure.unavailable }
         return "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec)"
     }
+    /// The same Messages database keeps its inode and birth time. `st_dev` is recorded
+    /// but not compared: APFS can renumber the same volume across a reboot, which
+    /// must not pause webhooks. Identities that do not parse compare exactly.
+    nonisolated static func sameSource(_ stored: String, _ live: String) -> Bool {
+        let a = stored.split(separator:":",omittingEmptySubsequences:false), b = live.split(separator:":",omittingEmptySubsequences:false)
+        guard a.count == 4, b.count == 4 else { return stored == live }
+        return a[1...] == b[1...]
+    }
     private func bindSource(_ identity: String, maximum: Int64, in next: inout State) throws {
-        if next.databaseChanged == true || (next.databaseIdentity != nil && next.databaseIdentity != identity) ||
+        if next.databaseChanged == true || (next.databaseIdentity.map { !Self.sameSource($0,identity) } ?? false) ||
             (next.initialized && maximum < next.highWater) {
             next.databaseChanged = true; try save(next); observation = "database_changed"
             throw ObservationFailure.databaseChanged
