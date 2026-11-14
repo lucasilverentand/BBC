@@ -212,6 +212,14 @@ final class EventsAndSearchTests: XCTestCase {
         XCTAssertFalse(WebhookService.sameSource("16777232:41714:1793909104:453085147","16777232:41714:1793909105:453085147"))
         XCTAssertFalse(WebhookService.sameSource("16777232:41714:1793909104:453085147","16777232:41714:1793909104:453085148"))
         XCTAssertFalse(WebhookService.sameSource("malformed","16777232:41714:1793909104:453085147"))
+        let volume = "5F10CD38-3A2B-4A2C-8423-5D5E2AAB4B49", other = "0D1C9A5E-7B7A-4C3E-9E52-0B6F1C2D3E4F"
+        XCTAssertTrue(WebhookService.sameSource("16777232:41714:1793909104:453085147:\(volume)","16777230:41714:1793909104:453085147:\(volume)"))
+        XCTAssertFalse(WebhookService.sameSource("16777232:41714:1793909104:453085147:\(volume)","16777232:41714:1793909104:453085147:\(other)"))
+        XCTAssertFalse(WebhookService.sameSource("16777232:41714:1793909104:453085147:\(volume)","16777232:41715:1793909104:453085147:\(volume)"))
+        // Identities stored before the volume UUID was recorded keep matching.
+        XCTAssertTrue(WebhookService.sameSource("16777232:41714:1793909104:453085147","16777230:41714:1793909104:453085147:\(volume)"))
+        XCTAssertFalse(WebhookService.sameSource("16777232:41714:1793909104:453085147","16777230:41715:1793909104:453085147:\(volume)"))
+        XCTAssertFalse(WebhookService.sameSource("16777232:41714:1793909104:453085147:\(volume):extra","16777232:41714:1793909104:453085147:\(volume)"))
     }
     /// Rewrites the stored identity as a reboot that renumbered the volume, or a replaced file, would leave it.
     private func rewriteStoredIdentity(in directory: URL, component: Int) throws {
@@ -222,6 +230,58 @@ final class EventsAndSearchTests: XCTestCase {
         object["databaseIdentity"] = parts.joined(separator:":")
         try JSONSerialization.data(withJSONObject:object).write(to:file)
         try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path)
+    }
+    /// Replaces the stored identity's components after the device, inode and birth time.
+    private func rewriteStoredVolume(in directory: URL, to volume: String?) throws {
+        let file = directory.appendingPathComponent("webhooks.json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:file)) as? [String:Any])
+        let parts = try XCTUnwrap(object["databaseIdentity"] as? String).split(separator:":").map(String.init)
+        XCTAssertEqual(parts.count,5)
+        object["databaseIdentity"] = (parts.prefix(4) + (volume.map { [$0] } ?? [])).joined(separator:":")
+        try JSONSerialization.data(withJSONObject:object).write(to:file)
+        try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path)
+    }
+    /// Registers a subscription, ticks once and returns the stored identity.
+    @MainActor private func registerAndTick(keys: APIKeyStore, keyID: UUID, url: URL) async throws -> String {
+        let service = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        _ = try await service.handle(method:"webhooks.register",params:["url":.string("https://fixture.invalid/events")],keyID:keyID)
+        await service.tick()
+        return try XCTUnwrap(service.state.databaseIdentity)
+    }
+    @MainActor func testLegacyIdentityKeepsWatchingAndRecordsVolume() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        insert(connection)
+        let keys = try APIKeyStore(directory:directory), secret = try keys.create(name:"fixture")
+        let keyID = try XCTUnwrap(keys.authenticate(secret))
+        let identity = try await registerAndTick(keys:keys,keyID:keyID,url:url)
+        XCTAssertEqual(identity.split(separator:":").count,5)
+        try rewriteStoredVolume(in:directory,to:nil)
+        let restarted = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        insert(connection,guid:"22222222-2222-4222-8222-222222222222")
+        await restarted.tick()
+        XCTAssertEqual(restarted.observation,"watching")
+        XCTAssertEqual(restarted.state.deliveries.count,1)
+        XCTAssertEqual(restarted.state.databaseIdentity,identity)
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:directory.appendingPathComponent("webhooks.json"))) as? [String:Any])
+        XCTAssertEqual(saved["databaseIdentity"] as? String,identity)
+    }
+    @MainActor func testRestoredCopyOnAnotherVolumeLatches() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        insert(connection)
+        let keys = try APIKeyStore(directory:directory), secret = try keys.create(name:"fixture")
+        let keyID = try XCTUnwrap(keys.authenticate(secret))
+        _ = try await registerAndTick(keys:keys,keyID:keyID,url:url)
+        // Same inode and birth time on a different volume: a restored or migrated copy.
+        try rewriteStoredVolume(in:directory,to:"0D1C9A5E-7B7A-4C3E-9E52-0B6F1C2D3E4F")
+        let restarted = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        insert(connection,guid:"22222222-2222-4222-8222-222222222222")
+        await restarted.tick()
+        XCTAssertEqual(restarted.observation,"database_changed")
+        XCTAssertTrue(restarted.state.deliveries.isEmpty)
     }
     @MainActor func testRebootDeviceRenumberingKeepsWebhooksWatching() async throws {
         let (url,connection) = try fixture()
