@@ -264,6 +264,8 @@ final class EventsAndSearchTests: XCTestCase {
         XCTAssertEqual(restarted.observation,"watching")
         XCTAssertEqual(restarted.state.deliveries.count,1)
         XCTAssertEqual(restarted.state.databaseIdentity,identity)
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:directory.appendingPathComponent("webhooks.json"))) as? [String:Any])
+        XCTAssertEqual(saved["databaseIdentity"] as? String,identity)
     }
     @MainActor func testRestoredCopyOnAnotherVolumeLatches() async throws {
         let (url,connection) = try fixture()

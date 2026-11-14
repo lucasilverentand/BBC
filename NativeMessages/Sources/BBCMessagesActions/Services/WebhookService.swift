@@ -248,12 +248,14 @@ struct WebhookSnapshot: Sendable {
     private func sourceIdentity() throws -> String {
         var info = stat()
         guard stat(databaseURL.path,&info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw ActionFailure.unavailable }
+        let file = "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec)"
         // A fresh URL avoids Foundation's cached resource values. The volume UUID persists
         // across reboots, unlike `volumeIdentifierKey`, so a copy restored onto another
         // volume cannot pass as the same database by matching its inode and birth time.
+        // A volume that reports no UUID falls back to inode and birth time.
         guard let volume = try URL(fileURLWithPath:databaseURL.path).resourceValues(forKeys:[.volumeUUIDStringKey]).volumeUUIDString,
-              !volume.isEmpty, !volume.contains(":") else { throw ActionFailure.unavailable }
-        return "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec):\(volume)"
+              !volume.isEmpty, !volume.contains(":") else { return file }
+        return "\(file):\(volume)"
     }
     /// The same Messages database keeps its inode, birth time and volume UUID. `st_dev`
     /// is recorded but not compared: APFS can renumber the same volume across a reboot,
