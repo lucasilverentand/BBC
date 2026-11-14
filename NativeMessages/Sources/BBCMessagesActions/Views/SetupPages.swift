@@ -5,6 +5,7 @@ struct SettingsPage: View {
     @Bindable var model: AppModel
     @AppStorage("startAPIOnLaunch") private var startAPI = false
     @AppStorage("apiPort") private var port = 7861
+    @AppStorage(NativeMessagesStartup.hiddenLaunchKey) private var openMessagesHidden = false
     private var active: Bool { model.running || model.starting }
     var body: some View {
         Form {
@@ -17,6 +18,9 @@ struct SettingsPage: View {
             Section("Startup") {
                 Toggle("Start at login",isOn:Binding(get:{ model.startAtLogin || model.loginNeedsApproval },set:{ value in Task { await model.setStartAtLogin(value) } })).disabled(model.updatingLogin)
                 Toggle("Start API at launch",isOn:$startAPI)
+                Toggle("Open Messages hidden at launch",isOn:$openMessagesHidden)
+                Text("Opens Messages in the background when BBC launches and hides Messages after BBC restarts it to connect native messaging.")
+                    .font(.caption).foregroundStyle(.secondary)
                 if model.loginNeedsApproval {
                     Button("Approve in Login Items…") { NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!) }
                 }

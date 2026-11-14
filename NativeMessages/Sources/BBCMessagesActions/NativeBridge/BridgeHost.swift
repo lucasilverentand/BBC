@@ -79,6 +79,10 @@ struct BridgeReadiness: Sendable {
             messages.standardInput = FileHandle.nullDevice
             messages.terminationHandler = { [weak broker] _ in broker?.stop() }
             try messages.run(); process = messages
+            if NativeMessagesStartup.hiddenLaunchEnabled {
+                let pid = messages.processIdentifier
+                Task { await NativeMessagesStartup.hide(pid: pid) }
+            }
             let deadline = Date().addingTimeInterval(10)
             repeat {
                 let status = await Task.detached { NativeBridgeClient.status() }.value

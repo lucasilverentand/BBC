@@ -38,4 +38,16 @@ import XCTest
             }
         }
     }
+    func testLaunchPlanLetsTheBridgeOwnTheMessagesLaunch() {
+        XCTAssertEqual(NativeMessagesStartup.launchPlan(openHidden: true, connectBridge: true, fullAccess: true), .connectBridge)
+        XCTAssertEqual(NativeMessagesStartup.launchPlan(openHidden: false, connectBridge: true, fullAccess: true), .connectBridge)
+    }
+    func testLaunchPlanOpensHiddenWithoutABridgeSession() {
+        XCTAssertEqual(NativeMessagesStartup.launchPlan(openHidden: true, connectBridge: false, fullAccess: true), .openHidden)
+        XCTAssertEqual(NativeMessagesStartup.launchPlan(openHidden: true, connectBridge: true, fullAccess: false), .openHidden)
+    }
+    func testLaunchPlanDoesNothingWhenDisabled() {
+        XCTAssertEqual(NativeMessagesStartup.launchPlan(openHidden: false, connectBridge: false, fullAccess: true), .none)
+        XCTAssertEqual(NativeMessagesStartup.launchPlan(openHidden: false, connectBridge: true, fullAccess: false), .none)
+    }
 }
