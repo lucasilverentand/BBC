@@ -248,15 +248,23 @@ struct WebhookSnapshot: Sendable {
     private func sourceIdentity() throws -> String {
         var info = stat()
         guard stat(databaseURL.path,&info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw ActionFailure.unavailable }
-        return "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec)"
+        // A fresh URL avoids Foundation's cached resource values. The volume UUID persists
+        // across reboots, unlike `volumeIdentifierKey`, so a copy restored onto another
+        // volume cannot pass as the same database by matching its inode and birth time.
+        guard let volume = try URL(fileURLWithPath:databaseURL.path).resourceValues(forKeys:[.volumeUUIDStringKey]).volumeUUIDString,
+              !volume.isEmpty, !volume.contains(":") else { throw ActionFailure.unavailable }
+        return "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec):\(volume)"
     }
-    /// The same Messages database keeps its inode and birth time. `st_dev` is recorded
-    /// but not compared: APFS can renumber the same volume across a reboot, which
-    /// must not pause webhooks. Identities that do not parse compare exactly.
+    /// The same Messages database keeps its inode, birth time and volume UUID. `st_dev`
+    /// is recorded but not compared: APFS can renumber the same volume across a reboot,
+    /// which must not pause webhooks. An identity saved before the volume UUID was
+    /// recorded matches on inode and birth time, and the next bind upgrades it.
+    /// Identities that do not parse compare exactly.
     nonisolated static func sameSource(_ stored: String, _ live: String) -> Bool {
         let a = stored.split(separator:":",omittingEmptySubsequences:false), b = live.split(separator:":",omittingEmptySubsequences:false)
-        guard a.count == 4, b.count == 4 else { return stored == live }
-        return a[1...] == b[1...]
+        guard (4...5).contains(a.count), (4...5).contains(b.count) else { return stored == live }
+        guard a[1..<4] == b[1..<4] else { return false }
+        return a.count == 4 || b.count == 4 || a[4] == b[4]
     }
     private func bindSource(_ identity: String, maximum: Int64, in next: inout State) throws {
         if next.databaseChanged == true || (next.databaseIdentity.map { !Self.sameSource($0,identity) } ?? false) ||
