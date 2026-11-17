@@ -11,3 +11,11 @@ Synthetic tests prove direction/sender/scope validation, cancellation, stale dea
 ## Live acceptance follow-up
 
 After #32 was installed on 2026-11-17, the authenticated gateway reported a ready native bridge and incoming-typing ABI capability, and a scoped SSE connection returned HTTP 200. During a fresh capture the operator confirmed typing briefly and clearing the draft; no typing frame arrived. That check did **not** establish working remote indication observation. Scoped, content-free native diagnostics were added to distinguish an idle native snapshot from lookup/signature/identity failure before repeating acceptance. Clients must retain fallback timing; the capability flag alone is not recipient-device proof.
+
+## Live acceptance result
+
+On 2026-11-17 a fresh, authenticated scoped SSE capture remained open while the operator confirmed typing for 3–5 seconds and clearing the draft without sending. The installed bridge was ready and native samples succeeded. After completing the diagnostics in #33/#34, a further five-minute capture included another operator-confirmed check: `available:true` and `has_incoming:true` remained present, while `current_indicator:false`, `typing_message:false`, `cancelled:false` and `from_me:false` remained unchanged. No start, stop or expiry event was emitted. The host could resolve the chat and its incoming message; these message getters did not expose the remote typing state in the controlled checks.
+
+This does not prove that every IMCore observation path or remote device is incapable of exposing typing. It does establish that this implementation has **not** met live acceptance and must not advertise production support. `incoming_typing` is false; `incoming_typing_probe_available` separately describes getter-ABI availability for diagnostics. Consumers retain their text-based bounded continuation fallback. No messages were sent, read marks generated, UI input dispatched or host protections changed to perform these probes.
+
+A future native notification or dedicated typing-state observation proposal needs its own exact chat/sender evidence and live start/cancel/expiry acceptance. Do not enable a production capability based only on method signatures, synthetic fixtures, or an open SSE connection. Do not use UI activation or composer automation to make the signal appear.

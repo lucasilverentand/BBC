@@ -34,6 +34,18 @@ final class IncomingTypingLeaseTests: XCTestCase {
         XCTAssertEqual(IncomingTypingDiagnostic.packet(.object(["ok":.bool(false),"failure_code":.string("native_chat_missing")]),now:1000).object?["reason"]?.string,"native_chat_missing")
         XCTAssertEqual(IncomingTypingDiagnostic.packet(.object(["failure_code":.string("private")]),now:1000).object?["reason"]?.string,"native_sample_unavailable")
     }
+    @MainActor func testGetterABICannotAdvertiseUnverifiedProductionSupport() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let keys = try APIKeyStore(directory:directory), token = try keys.create(name:"fixture")
+        let observer = try WebhookService(keys:keys,databaseURL:directory.appendingPathComponent("fixture.db"),deliver:{ _ in false })
+        let router = APIRouter(keys:keys,webhooks:observer) { _ in
+            .object(["native_bridge_ready":.bool(true),"native_bridge":.object(["capabilities":.array([.string("incoming-typing")])])])
+        }
+        let response = await router.handle(method:"GET",path:"/v1/status",headers:["authorization":"Bearer "+token],body:Data())
+        XCTAssertEqual(response.value.object?["incoming_typing"]?.bool,false)
+        XCTAssertEqual(response.value.object?["incoming_typing_probe_available"]?.bool,true)
+    }
     @MainActor func testUnauthorizedOrUnscopedStreamsDoNotTouchNativeObserver() async throws {
         actor Counter { var value = 0; func record() { value += 1 } }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
