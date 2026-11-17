@@ -129,7 +129,7 @@ final class LocalAPIServer: @unchecked Sendable {
                 let snapshot = await router.incomingTyping(headers:headers,peer:connection.endpoint)
                 let now = Date().timeIntervalSince1970*1000
                 let diagnostic = IncomingTypingDiagnostic.packet(snapshot,now:now)
-                if typingDiagnostic == nil {
+                if typingDiagnostic != diagnostic {
                     let status = BBCJSONValue.object(["observation":.string(batch.observation),"incoming_typing":diagnostic])
                     guard let body = try? JSONEncoder().encode(status),
                           await sendStream(Data("event: bbc.status\ndata: ".utf8)+body+Data("\n\n".utf8),to:connection) else { break }

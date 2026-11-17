@@ -121,14 +121,14 @@ final class NativeMessagingTests: XCTestCase {
             }
         }
     }
-    private func perform(_ method: String, fields: [String:Any] = [:]) -> [String:Any] {
+    private func perform(_ method: String, fields: [String:Any] = [:], loadTimeout: Double = 0.2) -> [String:Any] {
         var request: [String:Any] = ["method":method,"chat_guid":chatID,"message_guid":targetID,"typing_id":targetID,"deadline":(Date().timeIntervalSince1970+5)*1000]
         request.merge(fields) { _,new in new }
         // The exact target's guid must differ from the newly created message.
         var result: [String:Any] = [:]
         let completed = expectation(description:"native result")
-        BBCNativePerformWithTimeouts(request,resolver,0.2,BBCNativeDefaultScanTimeout) { result = $0; completed.fulfill() }
-        wait(for:[completed],timeout:2.2)
+        BBCNativePerformWithTimeouts(request,resolver,loadTimeout,BBCNativeDefaultScanTimeout) { result = $0; completed.fulfill() }
+        wait(for:[completed],timeout:max(2.2,loadTimeout+2))
         return result
     }
     func testUnknownChatAndMessageCannotDispatch() {
@@ -140,7 +140,7 @@ final class NativeMessagingTests: XCTestCase {
         FixtureChat.shared.targetAvailable = false
         FixtureChat.shared.loadable = true
         FixtureChat.shared.loadedIdentity = sentID
-        let result = perform("reply",fields:["text":"fixture reply"])
+        let result = perform("reply",fields:["text":"fixture reply"],loadTimeout:BBCNativeDefaultLoadTimeout)
         XCTAssertEqual(result["ok"] as? Bool,false)
         XCTAssertEqual(result["uncertain"] as? Bool,false)
         XCTAssertEqual(FixtureChat.shared.loads,1)
@@ -150,10 +150,12 @@ final class NativeMessagingTests: XCTestCase {
         XCTAssertEqual(perform("typing.start",fields:["deadline":0])["ok"] as? Bool,false)
         XCTAssertFalse(FixtureChat.shared.typing)
     }
+    // Success-path cache loading uses the production window; short deadline tests below
+    // independently verify that a delayed callback cannot dispatch after expiry.
     func testEvictedMessageLoadsOnceBeforeOneExactEmojiDispatch() {
         FixtureChat.shared.targetAvailable = false
         FixtureChat.shared.loadable = true
-        let result = perform("tapback",fields:["reaction":"🦥","associated_message_guid":"p:0/"+targetID])
+        let result = perform("tapback",fields:["reaction":"🦥","associated_message_guid":"p:0/"+targetID],loadTimeout:BBCNativeDefaultLoadTimeout)
         XCTAssertEqual(result["ok"] as? Bool,true)
         XCTAssertEqual(FixtureChat.shared.loads,1)
         XCTAssertEqual(FixtureChat.shared.sends,1)
@@ -163,7 +165,7 @@ final class NativeMessagingTests: XCTestCase {
     func testEvictedReplyTargetLoadsOnceBeforeOneThreadedSend() {
         FixtureChat.shared.targetAvailable = false
         FixtureChat.shared.loadable = true
-        let result = perform("reply",fields:["text":"evicted reply"])
+        let result = perform("reply",fields:["text":"evicted reply"],loadTimeout:BBCNativeDefaultLoadTimeout)
         XCTAssertEqual(result["ok"] as? Bool,true)
         XCTAssertEqual(FixtureChat.shared.loads,1)
         XCTAssertEqual(FixtureChat.shared.sends,1)
