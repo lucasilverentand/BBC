@@ -94,7 +94,10 @@ import BBCClient
                 fields["methods"] = .array(methods.filter { $0.string.map { mode.allows(method:$0) && keys.allows(keyID,method:$0) } == true })
                 fields["event_stream"] = .bool(webhooks != nil)
                 let native = fields["native_bridge"]?.object?["capabilities"]
-                fields["incoming_typing"] = .bool(webhooks != nil && fields["native_bridge_ready"]?.bool == true && Self.hasIncomingTyping(native))
+                // A supported getter ABI did not produce remote transitions in controlled
+                // host checks. Advertise the diagnostic probe, not production support.
+                fields["incoming_typing_probe_available"] = .bool(webhooks != nil && fields["native_bridge_ready"]?.bool == true && Self.hasIncomingTyping(native))
+                fields["incoming_typing"] = .bool(false)
                 fields["key_access"] = .string(access.rawValue)
                 fields["operating_mode"] = .string(mode == .readOnly || access == .readOnly ? "read-only" : "full")
                 if mode == .readOnly || !keys.allows(keyID,method:"send") {
