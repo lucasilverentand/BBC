@@ -8,6 +8,7 @@ final class LocalAPIServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "club.bluebubble.http")
     private let router: APIRouter
     private let onResponse: @MainActor @Sendable (String, Int) -> Void
+    private var streams: [ObjectIdentifier:Task<Void,Never>] = [:] // queue-confined
     private var connections: [UUID: NWConnection] = [:] // queue-confined
     init(host: String, port: UInt16, router: APIRouter,
          onResponse: @escaping @MainActor @Sendable (String, Int) -> Void = { _, _ in }) throws {
@@ -36,11 +37,16 @@ final class LocalAPIServer: @unchecked Sendable {
         guard connections.count < 8 else { connection.cancel(); return }
         let id = UUID(); connections[id] = connection
         connection.stateUpdateHandler = { [weak self] state in
-            if case .cancelled = state { self?.connections.removeValue(forKey: id) }
+            if case .cancelled = state {
+                self?.connections.removeValue(forKey:id)
+                self?.streams.removeValue(forKey:ObjectIdentifier(connection))?.cancel()
+            }
             if case .failed = state { connection.cancel() }
         }
         connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + 60) { [weak connection] in connection?.cancel() }
+        queue.asyncAfter(deadline: .now() + 60) { [weak self, weak connection] in
+            if let connection, self?.streams[ObjectIdentifier(connection)] == nil { connection.cancel() }
+        }
         receive(connection, buffer: RequestBuffer())
     }
     private final class RequestBuffer: @unchecked Sendable { var data = Data() }
@@ -70,12 +76,65 @@ final class LocalAPIServer: @unchecked Sendable {
             if bodyCount < length { guard !complete else { connection.cancel(); return }; self.receive(connection, buffer: state); return }
             let body = Data(buffer[range.upperBound...])
             let method = String(first[0]), path = String(first[1]), requestHeaders = headers
+            if method == "GET", path == "/v1/events", length == 0 {
+                guard self.streams.count < 2 else { self.reply(connection,status:503,value:.object(["error":.string("stream_limit")])); return }
+                self.streams[ObjectIdentifier(connection)] = Task { @MainActor in
+                    await self.stream(connection,headers:requestHeaders)
+                }
+                return
+            }
             Task { @MainActor in
                 let response = await self.router.handle(method: method, path: path, headers: requestHeaders, body: body, peer: connection.endpoint)
                 self.onResponse(method, response.status)
                 self.reply(connection, status: response.status, value: response.value)
             }
         }
+    }
+    @MainActor private func stream(_ connection: NWConnection, headers: [String:String]) async {
+        var batch = router.eventBatch(headers:headers,peer:connection.endpoint,after:headers["last-event-id"])
+        onResponse("GET",batch.status)
+        guard batch.status == 200, let initial = batch.cursor else {
+            reply(connection,status:batch.status,value:.object(["error":.string(batch.status == 409 ? "event_cursor_expired" : "stream_unavailable")]))
+            return
+        }
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\nX-Accel-Buffering: no\r\n\r\n"
+        guard await sendStream(Data(head.utf8),to:connection) else { return }
+        var cursor = initial
+        let until = ContinuousClock.now.advanced(by:.seconds(300))
+        var ticks = 0
+        // The ready checkpoint lets a new client save a baseline even in an idle chat.
+        var data = batch.frames
+        if data.isEmpty { data = Data("id: \(cursor)\nevent: bbc.ready\ndata: {}\n\n".utf8) }
+        guard await sendStream(data,to:connection) else { return }
+        while !Task.isCancelled, ContinuousClock.now < until {
+            do { try await Task.sleep(for:.seconds(1)) } catch { break }
+            batch = router.eventBatch(headers:headers,peer:connection.endpoint,after:cursor)
+            guard batch.status == 200, let next = batch.cursor else {
+                _ = await sendStream(Data("event: bbc.reset\ndata: {\"reconnect\":true}\n\n".utf8),to:connection)
+                break
+            }
+            ticks += 1
+            if !batch.frames.isEmpty {
+                guard await sendStream(batch.frames,to:connection) else { break }
+            } else if ticks % 15 == 0 {
+                let status = BBCJSONValue.object(["observation":.string(batch.observation)])
+                guard let body = try? JSONEncoder().encode(status),
+                      await sendStream(Data("event: bbc.status\ndata: ".utf8)+body+Data("\n\n".utf8),to:connection) else { break }
+            }
+            cursor = next
+        }
+        connection.cancel()
+    }
+    private func sendStream(_ data: Data, to connection: NWConnection) async -> Bool {
+        // One bounded batch at a time. A stalled peer cannot accumulate queued output.
+        let timeout = DispatchWorkItem { connection.cancel() }
+        queue.asyncAfter(deadline:.now()+10,execute:timeout)
+        let sent = await withCheckedContinuation { continuation in
+            connection.send(content:data,completion:.contentProcessed { error in continuation.resume(returning:error == nil) })
+        }
+        timeout.cancel()
+        if !sent { connection.cancel() }
+        return sent
     }
     private func reply(_ connection: NWConnection, status: Int, value: BBCJSONValue) {
         guard let body = try? JSONEncoder().encode(value), body.count <= 2_000_000 else { connection.cancel(); return }

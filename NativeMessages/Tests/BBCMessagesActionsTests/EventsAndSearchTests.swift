@@ -39,6 +39,113 @@ final class EventsAndSearchTests: XCTestCase {
         XCTAssertEqual(sqlite3_step(statement),SQLITE_DONE)
         XCTAssertEqual(sqlite3_exec(connection,"INSERT INTO chat_message_join VALUES(\(chat),last_insert_rowid())",nil,nil,nil),SQLITE_OK)
     }
+    @MainActor func testStreamSharesObservationAndReplaysAfterRestartWithoutWebhook() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        let keys = try APIKeyStore(directory:directory)
+        let id = try XCTUnwrap(keys.authenticate(keys.create(name:"stream")))
+        let other = try XCTUnwrap(keys.authenticate(keys.create(name:"other")))
+        var service: WebhookService? = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in XCTFail("No webhook delivery"); return false })
+        let baseline = try XCTUnwrap(service!.streamBatch(keyID:id,after:nil).cursor)
+        insert(connection)
+        await service!.tick()
+        let first = try service!.streamBatch(keyID:id,after:baseline)
+        XCTAssertTrue(String(decoding:first.frames,as:UTF8.self).contains("message.received"))
+        XCTAssertEqual(service!.state.stream?.events.count,1)
+        XCTAssertTrue(service!.state.deliveries.isEmpty)
+        _ = try service!.streamBatch(keyID:other,after:nil)
+        XCTAssertTrue(try service!.streamBatch(keyID:other,after:baseline).frames.isEmpty)
+        service = nil
+        let restarted = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        XCTAssertEqual(try restarted.streamBatch(keyID:id,after:baseline).frames,first.frames)
+        XCTAssertTrue(try restarted.streamBatch(keyID:id,after:first.cursor).frames.isEmpty)
+        XCTAssertEqual(try restarted.streamBatch(keyID:id,after:UUID().uuidString+":0").status,409)
+        XCTAssertEqual(sqlite3_exec(connection,"UPDATE message SET is_read=1",nil,nil,nil),SQLITE_OK)
+        await restarted.tick()
+        XCTAssertTrue(String(decoding:try restarted.streamBatch(keyID:id,after:first.cursor).frames,as:UTF8.self).contains("message.updated"))
+        try keys.revoke(id); await restarted.tick()
+        XCTAssertNil(restarted.state.stream?.clients[id])
+        XCTAssertFalse(restarted.state.stream!.events.contains { $0.keyID == id })
+    }
+
+    @MainActor func testHTTPStreamDeliversOperationThenClosesOnRevocation() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        let keys = try APIKeyStore(directory:directory), token = try keys.create(name:"HTTP stream")
+        let key = try XCTUnwrap(keys.authenticate(token))
+        let service = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        var calls = 0
+        let router = APIRouter(keys:keys,webhooks:service) { _ in calls += 1; return .object(["ok":.bool(true)]) }
+        let (server,_,base) = try await startFixtureServer(router:router)
+        defer { server.stopAndDrain() }
+        let session = URLSession(configuration:.ephemeral)
+        defer { session.invalidateAndCancel() }
+        var request = URLRequest(url:base.appendingPathComponent("v1/events"))
+        request.timeoutInterval = 5; request.setValue("Bearer "+token,forHTTPHeaderField:"Authorization")
+        let (bytes,response) = try await session.bytes(for:request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode,200)
+        XCTAssertEqual((response as? HTTPURLResponse)?.value(forHTTPHeaderField:"Content-Type"),"text/event-stream")
+        var lines = bytes.lines.makeAsyncIterator(), ready = false
+        while let line = try await lines.next() {
+            if line == "event: bbc.ready" { ready = true; break }
+        }
+        XCTAssertTrue(ready)
+        let operation = UUID()
+        let sent = await router.handle(method:"POST",path:"/v1/messages",headers:["authorization":"Bearer "+token,"idempotency-key":operation.uuidString],body:Data(#"{"to":"fixture@example.test","text":"fixture"}"#.utf8))
+        XCTAssertEqual(sent.status,200)
+        var observed = false
+        while let line = try await lines.next() {
+            if line.hasPrefix("data:"), line.contains(operation.uuidString) { observed = true; break }
+        }
+        XCTAssertTrue(observed); XCTAssertEqual(calls,1)
+        try keys.revoke(key)
+        var reset = false
+        while let line = try await lines.next() { if line == "event: bbc.reset" { reset = true } }
+        XCTAssertTrue(reset)
+    }
+
+    func testStreamRetentionReportsGapsAndRejectsFutureCursors() throws {
+        let key = UUID(), other = UUID()
+        var stream = EventStreamState()
+        stream.clients[key] = .init(since:Date(),afterRowID:0)
+        stream.clients[other] = .init(since:Date(),afterRowID:0)
+        for i in 0...EventStreamState.maximumEvents { try stream.append(.object(["index":.number(Double(i))]),keyID:key) }
+        XCTAssertEqual(stream.events.count,EventStreamState.maximumEvents)
+        XCTAssertEqual(stream.clients[key]?.floor,1)
+        XCTAssertEqual(stream.clients[other]?.floor,0)
+        XCTAssertThrowsError(try stream.position(stream.cursor(stream.sequence+1)))
+        XCTAssertEqual(try stream.position(stream.cursor(1)),1)
+    }
+
+    @MainActor func testOperationNotificationsRecoverFromReceiptFileAndStayKeyScoped() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        let keys = try APIKeyStore(directory:directory), token = try keys.create(name:"stream")
+        let key = try XCTUnwrap(keys.authenticate(token)), id = UUID()
+        let service = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        let router = APIRouter(keys:keys,webhooks:service) { _ in XCTFail("Receipt replay must never dispatch"); return .null }
+        let headers = ["authorization":"Bearer "+token]
+        let baseline = try XCTUnwrap(router.eventBatch(headers:headers,peer:.hostPort(host:.ipv4(.loopback),port:1),after:nil).cursor)
+        let file = directory.appendingPathComponent("operation-\(key)-\(id).json")
+        // A completed operation persisted just before a crash, with no publication marker.
+        let receipt = APIRouter.Operation(fingerprint:"fixture",result:.object(["ok":.bool(true)]),method:"send",createdAt:Date())
+        try JSONEncoder().encode(receipt).write(to:file)
+        await service.tick()
+        let batch = try service.streamBatch(keyID:key,after:baseline)
+        XCTAssertTrue(String(decoding:batch.frames,as:UTF8.self).contains("operation.updated"))
+        XCTAssertTrue(String(decoding:batch.frames,as:UTF8.self).contains(id.uuidString))
+        await service.tick()
+        XCTAssertEqual(try service.streamBatch(keyID:key,after:baseline).frames,batch.frames)
+        let other = try keys.create(name:"other")
+        let scoped = router.eventBatch(headers:["authorization":"Bearer "+other],peer:.hostPort(host:.ipv4(.loopback),port:1),after:baseline)
+        XCTAssertTrue(scoped.frames.isEmpty)
+        try keys.revoke(key)
+        XCTAssertEqual(router.eventBatch(headers:headers,peer:.hostPort(host:.ipv4(.loopback),port:1),after:batch.cursor).status,401)
+    }
+
     func testSearchCombinesLiteralUnicodeTextExactChatAndDates() throws {
         let (url,connection) = try fixture()
         defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url) }

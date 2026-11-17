@@ -12,5 +12,5 @@ enum OperatingMode: String, CaseIterable, Identifiable {
     func allows(method: String) -> Bool {
         self == .full || Self.observerMethods.contains(method)
     }
-    static let observerMethods: Set<String> = ["status","messages.after","messages.status","messages.search","media.download","read.status","media.visual","media.transcribe","webhooks.register","webhooks.list","webhooks.remove"]
+    static let observerMethods: Set<String> = ["events","status","messages.after","messages.status","messages.search","media.download","read.status","media.visual","media.transcribe","webhooks.register","webhooks.list","webhooks.remove"]
 }

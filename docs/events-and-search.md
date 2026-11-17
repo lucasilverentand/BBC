@@ -2,6 +2,37 @@
 
 BBC observes the local Messages database without opening a conversation. These features need Full Disk Access; they do not need the native bridge.
 
+## Resumable event stream
+
+Open `GET /v1/events` with the same `Authorization: Bearer …` header as other API calls. The response is `text/event-stream`; credentials never belong in the URL. Full-access and read-only keys can watch. The listener rechecks authentication and the key's direct-peer network restrictions every second, including on an already open stream. `/v1/status` advertises `event_stream:true` when the service is available.
+
+A first connection without `Last-Event-ID` establishes a baseline at the current tail. It emits `bbc.ready` with an opaque SSE `id`. Save that checkpoint before relying on the stream. Reconnect with `Last-Event-ID: <last durably consumed id>` to replay subsequent retained events. A stream ID is distinct from a message GUID, database row ID, operation UUID, and the payload's deduplication ID. Treat it as opaque.
+
+Message notifications use the same observer and payload identities as webhooks:
+
+```text
+id: <opaque replay cursor>
+event: bbc.event
+data: {"id":"<stable event UUID>","type":"message.received","observed_at":"…","message":{…}}
+
+```
+
+`message.updated` reports changed message state, including local sent/delivered/read observations. `operation.updated` instead contains `id`, `type`, `operation_id`, `method`, and `result`. The `result` is BBC's saved operation receipt, including provisional typing acceptance or a later final receipt. Deduplicate these notifications by their payload `id`; more than one update can belong to the same operation. An interrupted publication can repeat a notification with a different replay cursor but the same payload ID. Native submission, local confirmation and recipient delivery remain separate observations. An uncertain receipt never authorizes another send.
+
+The server emits `bbc.status` at least every 15 seconds while idle, carrying `{"observation":"watching"}` or the observer's current failure state. An open socket does not establish that Messages observation is healthy. Connections rotate after five minutes; reconnect with bounded backoff and the saved cursor. A `bbc.reset` event closes a stream whose authorization or cursor is no longer usable. Reconnect and inspect the HTTP status; 401/403 require correcting access, not a new mutation.
+
+Replay is persisted in the observer store and survives BBC restarts. Up to eight API keys can establish stream baselines. The journal retains at most 512 notifications and 8 MiB across keys. Falling behind retention, presenting a future cursor, or using a cursor from another journal returns HTTP 409 `event_cursor_expired` before streaming. Never silently discard that error or advance the saved cursor: reconcile message history and known operation receipts, then deliberately open a new baseline. Stream retention does not delete operation receipts or cause native retries. History reconciliation has the observer limits documented below; it cannot recreate every intermediate edit that occurred during a gap.
+
+Message replay entries are saved atomically with the database observation cursors. Operation receipts are saved before notification; a bounded round-robin repair scan visits up to 100 receipt files each second to recover an interrupted publication. Receipts created before a key's first streaming baseline do not generate retrospective operation notifications. Known operations remain directly readable at `/v1/operations/<UUID>` regardless of the stream. The observer pauses on database replacement rather than treating restored history as new messages.
+
+Each event batch contains at most 16 notifications, with one network write in flight and a ten-second stalled-write deadline. At most two of the listener's eight connections can stream, leaving capacity for commands. Webhooks continue independently; a full webhook outbox still pauses the shared observer. Stream clients do not acknowledge or drain webhook deliveries.
+
+### Client integration
+
+Keep one stream for the configured BBC key using the existing trusted transport and hostname verification. Persist an incoming message and its deduplication ID before advancing the stream checkpoint. Filter exact configured chat identities and retain native sender proof before admitting owner commands or marking messages read. Use operation notifications to refresh known receipts; never interpret arbitrary events as permission to execute a command.
+
+During migration, keep webhook intake until streaming custody and reconnect recovery are proven. Both transports share message event IDs, allowing one durable deduplication path. A stream does not alter command routes, operation UUIDs, unread coverage, or the rule against replaying uncertain sends. Text generation stays inside the client; send one completed reply rather than dispatching one iMessage per generated token.
+
 ## Webhooks
 
 Register a destination with `POST /v1/webhooks/register` and a new `Idempotency-Key` UUID:
