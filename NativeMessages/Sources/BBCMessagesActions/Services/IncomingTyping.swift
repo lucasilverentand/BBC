@@ -35,3 +35,23 @@ struct IncomingTypingLease {
         }
     }
 }
+
+/// Fixed diagnostic fields only. Never forward raw native packets or source identities.
+enum IncomingTypingDiagnostic {
+    static func packet(_ snapshot: BBCJSONValue?, now: Double) -> BBCJSONValue {
+        let fields = snapshot?.object
+        var result: [String:BBCJSONValue] = ["available":.bool(fields?["ok"]?.bool == true)]
+        if fields?["ok"]?.bool == true {
+            let active = fields?["active"]?.bool == true
+            result["state"] = .string(active ? ((fields?["expires_at"]?.numberValue ?? 0) > now ? "typing" : "expired") : "idle")
+            for key in ["has_incoming","current_indicator","typing_message","cancelled","from_me"] {
+                if let flag = fields?["observation"]?.object?[key]?.bool { result[key] = .bool(flag) }
+            }
+        } else {
+            let code = fields?["failure_code"]?.string ?? "native_sample_unavailable"
+            let allowed = ["incoming_typing_unsupported","native_chat_missing","incoming_typing_direct_chat_required","incoming_typing_identity_unavailable","incoming_typing_unavailable"]
+            result["reason"] = .string(allowed.contains(code) ? code : "native_sample_unavailable")
+        }
+        return .object(result)
+    }
+}

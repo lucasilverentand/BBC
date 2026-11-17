@@ -102,6 +102,7 @@ final class LocalAPIServer: @unchecked Sendable {
         var typing = IncomingTypingLease()
         let typingChat = router.typingScope(headers:headers)
         var cursor = initial
+        var typingDiagnostic: BBCJSONValue?
         let until = ContinuousClock.now.advanced(by:.seconds(300))
         var ticks = 0
         // The ready checkpoint lets a new client save a baseline even in an idle chat.
@@ -119,13 +120,22 @@ final class LocalAPIServer: @unchecked Sendable {
             if !batch.frames.isEmpty {
                 guard await sendStream(batch.frames,to:connection) else { break }
             } else if ticks % 15 == 0 {
-                let status = BBCJSONValue.object(["observation":.string(batch.observation)])
-                guard let body = try? JSONEncoder().encode(status),
+                var status: [String:BBCJSONValue] = ["observation":.string(batch.observation)]
+                if let typingDiagnostic { status["incoming_typing"] = typingDiagnostic }
+                guard let body = try? JSONEncoder().encode(BBCJSONValue.object(status)),
                       await sendStream(Data("event: bbc.status\ndata: ".utf8)+body+Data("\n\n".utf8),to:connection) else { break }
             }
             if let chat = typingChat {
                 let snapshot = await router.incomingTyping(headers:headers,peer:connection.endpoint)
-                let frame = typing.update(snapshot,chat:chat,now:Date().timeIntervalSince1970*1000)
+                let now = Date().timeIntervalSince1970*1000
+                let diagnostic = IncomingTypingDiagnostic.packet(snapshot,now:now)
+                if typingDiagnostic == nil {
+                    let status = BBCJSONValue.object(["observation":.string(batch.observation),"incoming_typing":diagnostic])
+                    guard let body = try? JSONEncoder().encode(status),
+                          await sendStream(Data("event: bbc.status\ndata: ".utf8)+body+Data("\n\n".utf8),to:connection) else { break }
+                }
+                typingDiagnostic = diagnostic
+                let frame = typing.update(snapshot,chat:chat,now:now)
                 if !frame.isEmpty, !(await sendStream(frame,to:connection)) { break }
             }
             cursor = next

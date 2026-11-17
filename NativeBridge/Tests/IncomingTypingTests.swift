@@ -40,7 +40,7 @@ final class IncomingTypingTests: XCTestCase {
         XCTAssertEqual(result["ok"] as? Bool,true)
         XCTAssertEqual(result["active"] as? Bool,true)
         XCTAssertEqual(result["sender_handle"] as? String,"remote@example.test")
-        XCTAssertEqual(Set(result.keys),["ok","active","chat_guid","sender_handle","source_guid","expires_at"])
+        XCTAssertEqual(Set(result.keys),["ok","active","chat_guid","sender_handle","source_guid","expires_at","observation"])
         XCTAssertLessThanOrEqual(result["expires_at"] as! Double,Date().addingTimeInterval(8).timeIntervalSince1970*1000)
     }
     func testCancellationOwnTypingMissingAndWrongChatFailClosed() {
