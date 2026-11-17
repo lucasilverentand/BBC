@@ -15,6 +15,7 @@ import BBCClient
         var supportDirectory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BBCMessagesActions")
         var mediaDirectory: URL = MediaStore.defaultDirectory
         var handoffDirectory: URL = MediaStore.handoffDirectory
+        var lockTimeout: TimeInterval = 5
         var confirmationTimeout: TimeInterval = 8
         var pollInterval: TimeInterval = 0.1
         var resolvedDatabaseURL: URL {
@@ -111,9 +112,8 @@ import BBCClient
         if let text { guard !text.isEmpty, text.utf8.count <= 64000, !text.utf8.contains(0) else { throw ActionFailure.invalid } }
         let directory = environment.supportDirectory
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let lock = open(directory.appendingPathComponent("automation.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-        guard lock >= 0 else { throw ActionFailure.unavailable }; defer { close(lock) }
-        guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { throw ActionFailure.busy }; defer { flock(lock, LOCK_UN) }
+        let lock = try await NativeOperationLock.acquire(name:"automation.lock",directory:directory,timeout:environment.lockTimeout)
+        defer { lock.release() }
         let pid = try await actions.ensureRunning()
         guard actions.automationStatus(pid) == noErr else { throw ActionFailure.unavailable }
         let before = try database.maximumRowID()

@@ -11,6 +11,17 @@ final class NativeOperationLock {
         guard fd >= 0 else { throw ActionFailure.unavailable }
         guard flock(fd,LOCK_EX|LOCK_NB) == 0 else { close(fd); fd = -1; throw ActionFailure.busy }
     }
+    /// Wait only before dispatch. Polling the lock never repeats a native action.
+    static func acquire(name: String, directory: URL? = nil, timeout: TimeInterval = 5) async throws -> NativeOperationLock {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
+        while true {
+            do { return try NativeOperationLock(name: name, directory: directory) }
+            catch ActionFailure.busy {
+                guard ContinuousClock.now < deadline else { throw ActionFailure.busy }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+        }
+    }
     func release() { if fd >= 0 { flock(fd,LOCK_UN); close(fd); fd = -1 } }
     deinit { release() }
 }

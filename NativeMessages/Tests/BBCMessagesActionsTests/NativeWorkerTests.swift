@@ -70,7 +70,7 @@ final class NativeWorkerTests: XCTestCase {
         try await BridgeFixtureHarness.run { harness in
             var helper: FixtureHelper? = behavior.isAbsent ? nil : try await FixtureHelper(harness: harness)
             let environment = NativeWorkerEnvironment(databaseURL: databaseURL, endpoint: harness.endpoint, lockDirectory: locks,
-                                                      bridgeTimeout: 10, confirmationTimeout: 0.3, confirmationInterval: 10)
+                                                      bridgeTimeout: 10, lockTimeout: 0, confirmationTimeout: 0.3, confirmationInterval: 10)
             let task = Task { @MainActor in try JSONSerialization.data(withJSONObject: await BBCMessagesActions.perform(input: input, environment: environment)) }
             switch behavior {
             case .absent, .idle: break

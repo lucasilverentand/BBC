@@ -66,7 +66,7 @@ struct AdvancedRequest {
         var dispatched = false
         do {
             let request = try AdvancedRequest(payload)
-            let lock = try NativeOperationLock(name:"automation.lock"); defer { lock.release() }
+            let lock = try await NativeOperationLock.acquire(name:"automation.lock"); defer { lock.release() }
             var fields = request.params; fields["method"] = .string(request.method)
             let db: MessagesDatabase?
             if ["availability","groups.create"].contains(request.method) { db = nil }

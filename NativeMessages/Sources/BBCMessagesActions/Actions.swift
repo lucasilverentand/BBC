@@ -8,6 +8,7 @@ struct NativeWorkerEnvironment: Sendable {
     var endpoint: BridgeWire.Endpoint?
     var lockDirectory: URL?
     var bridgeTimeout = 25
+    var lockTimeout: TimeInterval = 5
     var confirmationTimeout: TimeInterval = 5
     var confirmationInterval = 100
     static var production: NativeWorkerEnvironment {
@@ -86,7 +87,7 @@ enum BBCMessagesActions {
                 }
                 receipt["chat_guid"] = parameters.chat_guid; receipt["message_guid"] = guid; receipt["attachment_guid"] = parameters.attachment_guid!
             } else {
-                let lock = try NativeOperationLock(name:"automation.lock",directory:environment.lockDirectory); defer { lock.release() }
+                let lock = try await NativeOperationLock.acquire(name:"automation.lock",directory:environment.lockDirectory,timeout:environment.lockTimeout); defer { lock.release() }
                 if ["read","reply","link"].contains(request.method) {
                     guard Set(try database.unread(chat:parameters.chat_guid)).isSubset(of:Set(parameters.read_guids!)) else { throw ActionFailure.invalid }
                 }
