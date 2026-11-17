@@ -108,3 +108,7 @@ Start returns an accepted session UUID promptly. A session lasts at most 30 seco
 Local records live in `~/Library/Application Support/Blue Bubble Club` with private directory/file permissions. Keys are stored as SHA-256 hashes of 256-bit random secrets; operation records retain request fingerprints and receipts. Uncertain records deliberately survive restarts. There is no automatic expiry or replay of retained operations.
 
 The operator owns network exposure. The app offers loopback or other-device binding, without creating tunnels or opening router ports. Use a private trusted network or put your own HTTPS endpoint in front of the app. Keys grant access to the signed-in account's supported messaging features. Revoking a key blocks new calls; already dispatched effects may finish.
+
+## Persistent events
+
+`GET /v1/events` provides authenticated Server-Sent Events with durable replay through `Last-Event-ID`. `/v1/status` advertises `event_stream`. See [the event stream contract](events-and-search.md#resumable-event-stream) for checkpoints, retention gaps, operation receipts, heartbeat health and client migration. Commands retain their existing HTTP routes and idempotency keys.

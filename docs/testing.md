@@ -35,6 +35,8 @@ python3 script/test_swift.py NativeMessages
 
 The native tests use synthetic Objective-C objects, temporary databases and stores, fake bridge peers, and injected actions. Loopback listeners request OS-assigned ports. Fixture readiness, socket reads, HTTP peer teardown and movie-writer waits have watchdogs; blocked loopback access fails with diagnostics rather than skipping coverage. Native message-load and scan deadlines are shortened through fixture seams while production defaults stay at five and ten seconds. Broker tests use explicit transaction IDs and protocol barriers to check command counts, rejection ownership and late results. See [native bridge architecture](native-bridge.md) for that boundary. Do not start the app, run native-access diagnostics, or connect a bridge merely to run fixture tests. Build and packaging validation in CI is separate from runtime messaging.
 
+The event-stream fixtures verify durable restart replay, per-key isolation, bounded retention and cursor validation, receipt-publication recovery, a real HTTP SSE connection carrying an operation result, and closure after key revocation. They use temporary stores and synthetic databases; no live account is involved.
+
 ## Worker and receipt contracts
 
 The operational-log persistence fixture uses atomic writes without device-lock protection so synthetic files remain readable when the host keybag is unavailable. Production retains its `completeFileProtectionUnlessOpen` default; the fixture does not verify device-lock behavior or change any host protection.

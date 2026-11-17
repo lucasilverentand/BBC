@@ -30,6 +30,7 @@ struct WebhookSnapshot: Sendable {
         var nextAttempt: Date = .distantPast
     }
     struct State: Codable, Equatable {
+        var stream: EventStreamState?
         var subscriptions: [Subscription] = []
         var deliveries: [Delivery] = []
         var highWater: Int64 = 0
@@ -55,6 +56,7 @@ struct WebhookSnapshot: Sendable {
     private var task: Task<Void,Never>?
     private var running = false
     private var generation = UUID()
+    private var operationScan = 0
     init(keys: APIKeyStore,
          databaseURL: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/chat.db"),
          deliver: @escaping @Sendable (URLRequest) async -> Bool = WebhookHTTPDelivery.send) throws {
@@ -69,6 +71,10 @@ struct WebhookSnapshot: Sendable {
             state = try JSONDecoder().decode(State.self,from:Data(contentsOf:file))
             guard state.subscriptions.count <= Self.maximumSubscriptions, state.deliveries.count <= Self.maximumDeliveries,
                   state.snapshots.count <= Self.maximumSnapshots else { throw ActionFailure.invalid }
+            if let stream = state.stream {
+                guard stream.clients.count <= 8, stream.events.count <= EventStreamState.maximumEvents,
+                      stream.events.reduce(0,{ $0 + $1.body.count }) <= EventStreamState.maximumBytes else { throw ActionFailure.invalid }
+            }
         } else { state = State() }
         if state.databaseChanged == true { observation = "database_changed" }
     }
@@ -96,7 +102,7 @@ struct WebhookSnapshot: Sendable {
             let maximum = try database.maximumRowID()
             guard Self.sameSource(identity,try sourceIdentity()) else { throw ActionFailure.unavailable }
             var next = state
-            if next.subscriptions.isEmpty { resetObservation(in:&next) }
+            if next.subscriptions.isEmpty && next.stream?.clients.isEmpty != false { resetObservation(in:&next) }
             try bindSource(identity,maximum:maximum,in:&next)
             var bytes = [UInt8](repeating:0,count:32)
             guard SecRandomCopyBytes(kSecRandomDefault,bytes.count,&bytes) == errSecSuccess else { throw ActionFailure.unavailable }
@@ -113,7 +119,7 @@ struct WebhookSnapshot: Sendable {
             guard let raw = params["webhook_id"]?.string, let id = UUID(uuidString:raw),
                   state.subscriptions.contains(where: { $0.id == id && $0.keyID == keyID }) else { throw ActionFailure.invalid }
             var next = state; next.subscriptions.removeAll { $0.id == id }; next.deliveries.removeAll { $0.subscriptionID == id }
-            if next.subscriptions.isEmpty { resetObservation(in:&next); observation = "idle" }
+            if next.subscriptions.isEmpty && next.stream?.clients.isEmpty != false { resetObservation(in:&next); observation = "idle" }
             try save(next)
             return .object(["ok":.bool(true),"webhook_id":.string(id.uuidString)])
         default: throw ActionFailure.invalid
@@ -141,7 +147,12 @@ struct WebhookSnapshot: Sendable {
             next.subscriptions.removeAll { !valid.contains($0.keyID) }
             let active = Set(next.subscriptions.map(\.id))
             next.deliveries.removeAll { !active.contains($0.subscriptionID) }
-            if next.subscriptions.isEmpty {
+            if var stream = next.stream {
+                stream.clients = stream.clients.filter { valid.contains($0.key) }
+                stream.events.removeAll { !valid.contains($0.keyID) }
+                next.stream = stream
+            }
+            if next.subscriptions.isEmpty && next.stream?.clients.isEmpty != false {
                 resetObservation(in:&next)
                 try save(next); observation = "idle"; return
             }
@@ -178,6 +189,7 @@ struct WebhookSnapshot: Sendable {
             if error is ObservationFailure { observation = "database_changed" }
             else { observation = (error as? ActionFailure) == .busy ? "outbox_full" : "observation_unavailable" }
         }
+        reconcileOperationEvents()
         // Delivery continues even if a full outbox or unavailable database has
         // paused observation. A successful drain allows the next scan to resume.
         for delivery in state.deliveries.filter({ $0.nextAttempt <= now }).prefix(4) {
@@ -224,9 +236,78 @@ struct WebhookSnapshot: Sendable {
             let body = try JSONEncoder.sorted.encode(packet)
             guard body.count <= 131_072 else { throw ActionFailure.invalid }
             for item in subscriptions { next.deliveries.append(.init(id:eventID,subscriptionID:item.id,body:body)) }
+            if let clients = next.stream?.clients {
+                for (keyID,client) in clients where type != "message.received" || snapshot.rowID > client.afterRowID {
+                    try next.stream?.append(packet,keyID:keyID)
+                }
+            }
         }
         next.snapshots[snapshot.key] = SnapshotRecord(rowID:snapshot.rowID,digest:snapshot.digest)
     }
+    /// No cursor means a new baseline at the current tail. Resume requires the last
+    /// durably consumed cursor; a gap is explicit and never silently skips events.
+    func streamBatch(keyID: UUID, after cursor: String?) throws -> EventStreamBatch {
+        guard keys.keys.contains(where:{ $0.id == keyID }) else { throw ActionFailure.invalid }
+        var next = state
+        if next.stream == nil { next.stream = EventStreamState() }
+        if next.stream!.clients[keyID] == nil {
+            guard next.stream!.clients.count < 8 else { throw ActionFailure.busy }
+            let identity = try sourceIdentity(), database = try MessagesDatabase(url:databaseURL)
+            let maximum = try database.maximumRowID()
+            guard Self.sameSource(identity,try sourceIdentity()) else { throw ActionFailure.unavailable }
+            try bindSource(identity,maximum:maximum,in:&next)
+            next.stream!.clients[keyID] = .init(since:Date(),afterRowID:maximum)
+            try save(next)
+        }
+        let stream = state.stream!
+        let position: Int64
+        if let cursor {
+            guard let value = try? stream.position(cursor), value >= stream.clients[keyID]!.floor else {
+                return EventStreamBatch(status:409,cursor:nil,frames:Data())
+            }
+            position = value
+        } else { position = stream.sequence }
+        let events = stream.events.filter { $0.keyID == keyID && $0.sequence > position }.prefix(16)
+        var frames = Data(), last = position
+        for event in events {
+            frames.append(Data("id: \(stream.cursor(event.sequence))\nevent: bbc.event\ndata: ".utf8))
+            frames.append(event.body); frames.append(Data("\n\n".utf8)); last = event.sequence
+        }
+        return EventStreamBatch(status:200,cursor:stream.cursor(last),frames:frames,observation:observation)
+    }
+
+    /// The operation file remains authoritative. Its publication marker is written
+    /// after the replay journal, so interruption can duplicate a notification but
+    /// cannot turn a notification into another native dispatch.
+    func publishOperation(file: URL, keyID: UUID, operationID: UUID) throws {
+        guard let client = state.stream?.clients[keyID], keys.keys.contains(where:{ $0.id == keyID }) else { return }
+        var operation = try JSONDecoder().decode(APIRouter.Operation.self,from:Data(contentsOf:file))
+        guard let result = operation.result, let method = operation.method,
+              let created = operation.createdAt, created >= client.since else { return }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let digest = APIKeyStore.digest(String(decoding:try encoder.encode(result),as:UTF8.self))
+        guard digest != operation.eventDigest else { return }
+        var next = state
+        try next.stream?.append(.object(["id":.string(operationID.uuidString+":"+digest),"type":.string("operation.updated"),
+            "operation_id":.string(operationID.uuidString),"method":.string(method),"result":result]),keyID:keyID)
+        try save(next)
+        operation.eventDigest = digest
+        try encoder.encode(operation).write(to:file,options:.atomic)
+        try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path)
+    }
+    private func reconcileOperationEvents() {
+        guard state.stream?.clients.isEmpty == false,
+              let files = try? FileManager.default.contentsOfDirectory(at:keys.directory,includingPropertiesForKeys:nil).filter({ $0.lastPathComponent.hasPrefix("operation-") && $0.pathExtension == "json" }).sorted(by:{ $0.lastPathComponent < $1.lastPathComponent }), !files.isEmpty else { return }
+        // Round-robin replay repairs a crash between receipt persistence and publication.
+        for _ in 0..<min(100,files.count) {
+            let file = files[operationScan % files.count]; operationScan = (operationScan+1) % files.count
+            let name = file.deletingPathExtension().lastPathComponent
+            let raw = String(name.dropFirst("operation-".count))
+            guard raw.count == 73, let key = UUID(uuidString:String(raw.prefix(36))), let id = UUID(uuidString:String(raw.suffix(36))) else { continue }
+            try? publishOperation(file:file,keyID:key,operationID:id)
+        }
+    }
+
     private func save(_ next: State) throws {
         guard next != state else { return }
         // A revisit can safely restart from an earlier persisted cursor because

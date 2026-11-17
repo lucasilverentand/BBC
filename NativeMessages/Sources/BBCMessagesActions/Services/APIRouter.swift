@@ -31,7 +31,22 @@ import BBCClient
     ]
     static let observationalMethods: Set<String> = ["messages.after","messages.status","messages.search","availability","media.download","read.status","media.visual","media.transcribe","webhooks.list","schedule.get","schedule.list"]
     struct Response { let status: Int; let value: BBCJSONValue }
-    struct Operation: Codable { let fingerprint: String; var result: BBCJSONValue? }
+    struct Operation: Codable {
+        let fingerprint: String
+        var result: BBCJSONValue?
+        var method: String?
+        var createdAt: Date?
+        var eventDigest: String?
+    }
+
+    func eventBatch(headers: [String:String], peer: NWEndpoint?, after: String?) -> EventStreamBatch {
+        guard let authorization = headers["authorization"], authorization.hasPrefix("Bearer "),
+              let keyID = keys.authenticate(String(authorization.dropFirst(7))) else { return .init(status:401,cursor:nil,frames:Data()) }
+        guard keys.permits(keyID,endpoint:peer), keys.allows(keyID,method:"events"), mode.allows(method:"events") else { return .init(status:403,cursor:nil,frames:Data()) }
+        guard let webhooks else { return .init(status:503,cursor:nil,frames:Data()) }
+        do { return try webhooks.streamBatch(keyID:keyID,after:after) }
+        catch { return .init(status:503,cursor:nil,frames:Data()) }
+    }
 
     func handle(method: String, path: String, headers: [String: String], body: Data, peer: NWEndpoint? = .hostPort(host: .ipv4(.loopback), port: 1)) async -> Response {
         guard let authorization = headers["authorization"], authorization.hasPrefix("Bearer "),
@@ -56,6 +71,7 @@ import BBCClient
                 if webhooks != nil { methods += ["webhooks.register","webhooks.list","webhooks.remove"].map(BBCJSONValue.string) }
                 if schedules != nil { methods += ["schedule.create","schedule.update","schedule.cancel","schedule.get","schedule.list"].map(BBCJSONValue.string) }
                 fields["methods"] = .array(methods.filter { $0.string.map { mode.allows(method:$0) && keys.allows(keyID,method:$0) } == true })
+                fields["event_stream"] = .bool(webhooks != nil)
                 fields["key_access"] = .string(access.rawValue)
                 fields["operating_mode"] = .string(mode == .readOnly || access == .readOnly ? "read-only" : "full")
                 if mode == .readOnly || !keys.allows(keyID,method:"send") {
@@ -103,9 +119,12 @@ import BBCClient
                 guard saved.fingerprint == fingerprint else { return .init(status: 409, value: .object(["error": .string("idempotency_conflict")])) }
                 return .init(status: saved.result == nil ? 409 : 200, value: saved.result ?? .object(["ok": .bool(false), "uncertain": .bool(true), "error": .string("reconcile_before_retrying")]))
             }
+            let createdAt = Date()
             func persist(_ record: Operation) throws {
+                var record = record; record.method = operationMethod; record.createdAt = createdAt
                 try encoder.encode(record).write(to: file, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+                try? webhooks?.publishOperation(file:file,keyID:keyID,operationID:operationID)
             }
             // Reject local typing errors before reserving an operation that cannot dispatch.
             if operationMethod == "typing.stop" {
