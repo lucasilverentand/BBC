@@ -69,6 +69,39 @@ final class EventsAndSearchTests: XCTestCase {
         XCTAssertFalse(restarted.state.stream!.events.contains { $0.keyID == id })
     }
 
+    @MainActor func testScopedIncomingTypingFramesHaveNoReplayIDAndNeverEnterJournal() async throws {
+        let (url,connection) = try fixture()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { sqlite3_close(connection); try? FileManager.default.removeItem(at:url); try? FileManager.default.removeItem(at:directory) }
+        let keys = try APIKeyStore(directory:directory), token = try keys.create(name:"typing stream",access:.readOnly)
+        let service = try WebhookService(keys:keys,databaseURL:url,deliver:{ _ in false })
+        let expires = Date().addingTimeInterval(8).timeIntervalSince1970*1000
+        let router = APIRouter(keys:keys,webhooks:service,observeTyping:{ chat in
+            .object(["ok":.bool(true),"active":.bool(true),"chat_guid":.string(chat),"sender_handle":.string("fixture@example.test"),"source_guid":.string("native-typing"),"expires_at":.number(expires)])
+        }) { _ in XCTFail("No worker mutation"); return .null }
+        let (server,_,base) = try await startFixtureServer(router:router)
+        defer { server.stopAndDrain() }
+        let session = URLSession(configuration:.ephemeral)
+        defer { session.invalidateAndCancel() }
+        var request = URLRequest(url:base.appendingPathComponent("v1/events"))
+        request.timeoutInterval = 5; request.setValue("Bearer "+token,forHTTPHeaderField:"Authorization")
+        request.setValue("any;-;fixture@example.test",forHTTPHeaderField:"X-BBC-Typing-Chat")
+        let (bytes,response) = try await session.bytes(for:request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode,200)
+        var lines = bytes.lines.makeAsyncIterator(), typing = false
+        while let line = try await lines.next() {
+            if line == "event: bbc.typing" { typing = true; continue }
+            if typing {
+                XCTAssertFalse(line.hasPrefix("id:"))
+                if line.hasPrefix("data:") { XCTAssertTrue(line.contains("typing.started")); break }
+            }
+        }
+        XCTAssertTrue(typing)
+        XCTAssertTrue(service.state.stream!.events.isEmpty)
+        XCTAssertEqual(service.state.stream!.sequence,0)
+        XCTAssertFalse(String(decoding:try Data(contentsOf:directory.appendingPathComponent("webhooks.json")),as:UTF8.self).contains("typing.started"))
+    }
+
     @MainActor func testHTTPStreamDeliversOperationThenClosesOnRevocation() async throws {
         let (url,connection) = try fixture()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

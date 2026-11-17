@@ -149,7 +149,7 @@ final class BridgeBroker: @unchecked Sendable {
         }
         if client.role == "helper" {
             if kind == "hello", fields["version"]?.numberValue == Double(BridgeWire.version), case .array(let features) = fields["capabilities"] {
-                let allowed = Set(["read","reply","link","tapback","custom-emoji","typing"]).union(Self.advancedMethods)
+                let allowed = Set(["read","reply","link","tapback","custom-emoji","typing","incoming-typing"]).union(Self.advancedMethods)
                 capabilities = features.filter { $0.string.map(allowed.contains) == true }; return
             }
             guard kind == "result", let request = fields["id"]?.string, let result = fields["result"] else { client.connection.cancel(); return }
@@ -168,7 +168,7 @@ final class BridgeBroker: @unchecked Sendable {
         if method == "bridge.status" {
             finish(requestID,worker:id,result:.object(["ready":.bool(helper != nil && !capabilities.isEmpty),"version":.number(1),"capabilities":.array(capabilities)])); return
         }
-        guard pending.count < configuration.maximumPending, (["read","reply","link","tapback","typing.start","typing.stop"].contains(method) || Self.advancedMethods.contains(method)), !completed.contains(requestID), pending[requestID] == nil,
+        guard pending.count < configuration.maximumPending, (["read","reply","link","tapback","typing.start","typing.stop","typing.observe"].contains(method) || Self.advancedMethods.contains(method)), !completed.contains(requestID), pending[requestID] == nil,
               let helper, let embedded = clients[helper], !capabilities.isEmpty else {
             finish(requestID,worker:id,result:.object(["ok":.bool(false),"uncertain":.bool(false),"failure_code":.string("native_bridge_unavailable")])); return
         }

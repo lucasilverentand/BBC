@@ -99,6 +99,8 @@ final class LocalAPIServer: @unchecked Sendable {
         }
         let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\nX-Accel-Buffering: no\r\n\r\n"
         guard await sendStream(Data(head.utf8),to:connection) else { return }
+        var typing = IncomingTypingLease()
+        let typingChat = router.typingScope(headers:headers)
         var cursor = initial
         let until = ContinuousClock.now.advanced(by:.seconds(300))
         var ticks = 0
@@ -120,6 +122,11 @@ final class LocalAPIServer: @unchecked Sendable {
                 let status = BBCJSONValue.object(["observation":.string(batch.observation)])
                 guard let body = try? JSONEncoder().encode(status),
                       await sendStream(Data("event: bbc.status\ndata: ".utf8)+body+Data("\n\n".utf8),to:connection) else { break }
+            }
+            if let chat = typingChat {
+                let snapshot = await router.incomingTyping(headers:headers,peer:connection.endpoint)
+                let frame = typing.update(snapshot,chat:chat,now:Date().timeIntervalSince1970*1000)
+                if !frame.isEmpty, !(await sendStream(frame,to:connection)) { break }
             }
             cursor = next
         }

@@ -20,6 +20,7 @@ This is a public product repository. Keep personal sending accounts, recipient i
 - [protocol.md](protocol.md)
 - [Native bridge architecture](native-bridge.md)
 - [SIP-enabled custom Tapback research and diagnostic](development/sip-enabled-tapbacks.md)
+- [Incoming typing observation and verification boundary](development/incoming-typing.md)
 - [Groups, message changes, multipart sending and availability](native-features.md)
 - [Webhooks and search](events-and-search.md)
 - [Scheduled sends](scheduling.md)

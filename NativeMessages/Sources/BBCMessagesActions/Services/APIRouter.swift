@@ -11,10 +11,14 @@ import BBCClient
     private let webhooks: WebhookService?
     private let schedules: LocalScheduleService?
     private let mode: OperatingMode
+    private let observeTyping: @Sendable (String) async -> BBCJSONValue?
     init(keys: APIKeyStore, webhooks: WebhookService? = nil, schedules: LocalScheduleService? = nil,
          mode: OperatingMode = .full,
+         observeTyping: @escaping @Sendable (String) async -> BBCJSONValue? = { chat in
+             await Task.detached { try? NativeBridgeClient.request(.object(["method":.string("typing.observe"),"chat_guid":.string(chat)]),timeout:1) }.value
+         },
          execute: @escaping @MainActor (BBCJSONValue) async throws -> BBCJSONValue) {
-        self.keys = keys; self.webhooks = webhooks; self.schedules = schedules; self.mode = mode; self.execute = execute
+        self.keys = keys; self.webhooks = webhooks; self.schedules = schedules; self.mode = mode; self.execute = execute; self.observeTyping = observeTyping
     }
     static let routeMethods: [String: String] = [
             "/v1/messages":"send", "/v1/messages/after":"messages.after", "/v1/messages/status":"messages.status",
@@ -44,8 +48,25 @@ import BBCClient
               let keyID = keys.authenticate(String(authorization.dropFirst(7))) else { return .init(status:401,cursor:nil,frames:Data()) }
         guard keys.permits(keyID,endpoint:peer), keys.allows(keyID,method:"events"), mode.allows(method:"events") else { return .init(status:403,cursor:nil,frames:Data()) }
         guard let webhooks else { return .init(status:503,cursor:nil,frames:Data()) }
+        if headers["x-bbc-typing-chat"] != nil, typingScope(headers:headers) == nil { return .init(status:400,cursor:nil,frames:Data()) }
         do { return try webhooks.streamBatch(keyID:keyID,after:after) }
         catch { return .init(status:503,cursor:nil,frames:Data()) }
+    }
+
+    private static func hasIncomingTyping(_ value: BBCJSONValue?) -> Bool {
+        if case .array(let capabilities) = value { return capabilities.contains(.string("incoming-typing")) }
+        return false
+    }
+    func typingScope(headers: [String:String]) -> String? {
+        guard let chat = headers["x-bbc-typing-chat"], AdvancedRequest.chat(chat), chat.hasPrefix("any;-;") || chat.hasPrefix("iMessage;-;") else { return nil }
+        return chat
+    }
+    func incomingTyping(headers: [String:String], peer: NWEndpoint?) async -> BBCJSONValue? {
+        guard let chat = typingScope(headers:headers), let auth = headers["authorization"], auth.hasPrefix("Bearer "),
+              let key = keys.authenticate(String(auth.dropFirst(7))), keys.permits(key,endpoint:peer), keys.allows(key,method:"events") else { return nil }
+        let result = await observeTyping(chat)
+        guard keys.authenticate(String(auth.dropFirst(7))) == key, keys.permits(key,endpoint:peer), keys.allows(key,method:"events") else { return nil }
+        return result
     }
 
     func handle(method: String, path: String, headers: [String: String], body: Data, peer: NWEndpoint? = .hostPort(host: .ipv4(.loopback), port: 1)) async -> Response {
@@ -72,6 +93,8 @@ import BBCClient
                 if schedules != nil { methods += ["schedule.create","schedule.update","schedule.cancel","schedule.get","schedule.list"].map(BBCJSONValue.string) }
                 fields["methods"] = .array(methods.filter { $0.string.map { mode.allows(method:$0) && keys.allows(keyID,method:$0) } == true })
                 fields["event_stream"] = .bool(webhooks != nil)
+                let native = fields["native_bridge"]?.object?["capabilities"]
+                fields["incoming_typing"] = .bool(webhooks != nil && fields["native_bridge_ready"]?.bool == true && Self.hasIncomingTyping(native))
                 fields["key_access"] = .string(access.rawValue)
                 fields["operating_mode"] = .string(mode == .readOnly || access == .readOnly ? "read-only" : "full")
                 if mode == .readOnly || !keys.allows(keyID,method:"send") {
