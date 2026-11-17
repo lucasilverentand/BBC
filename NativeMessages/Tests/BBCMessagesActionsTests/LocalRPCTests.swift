@@ -46,7 +46,7 @@ import BBCClient
         e.supportDirectory = root.appendingPathComponent("support")
         e.mediaDirectory = root.appendingPathComponent("media")
         e.handoffDirectory = root.appendingPathComponent("handoff")
-        e.confirmationTimeout = 0.3; e.pollInterval = 0.01
+        e.lockTimeout = 0.05; e.confirmationTimeout = 0.3; e.pollInterval = 0.01
         return e
     }
     private final class Counters { var starts = 0, statuses = 0, scripts: [String] = [] }

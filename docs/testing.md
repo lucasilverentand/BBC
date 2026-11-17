@@ -41,6 +41,8 @@ The operational-log persistence fixture uses atomic writes without device-lock p
 
 Worker tests must inject database, bridge and lock paths beneath a temporary root, plus fake startup/permission/script actions for the legacy RPC worker. Never override HOME or run the live script executor in a fixture. Classify proven pre-dispatch errors as non-dispatched; once script execution begins or forwarding may have occurred, retain uncertainty until exact native/database confirmation is established. Confirmation polling must never redispatch.
 
+The typing concurrency fixture keeps a lease open while a fake plain send submits exactly once and a scoped read confirms. It also holds the operation lock across cleanup to exercise waiting before dispatch. A router barrier fixture verifies that a stop response waits for the worker's cleanup rather than only requesting cancellation.
+
 Router tests cover pending requests, operation ownership and replay after reopening stores. Atomic replacement and process-restart safety do not establish power-loss durability. A receipt-write failure after dispatch must preserve the observed result while the surviving intent blocks replay.
 
 ## CI and acceptance

@@ -229,6 +229,33 @@ private func headers(_ secret: String, _ id: UUID? = nil) -> [String: String] {
         }
     }
 
+    func testTypingStopWaitsForWorkerCleanup() async throws {
+        try await fixture { keys, secret, _ in
+            let gate = Gate()
+            var cleanup: CheckedContinuation<Void,Never>?, stopped = false
+            let router = APIRouter(keys:keys) { _ in
+                do { _ = try await gate.enter() } catch { /* Worker still has native cleanup to finish. */ }
+                await withCheckedContinuation { cleanup = $0 }
+                return .object(["ok":.bool(true),"cleanup":.string("confirmed")])
+            }
+            let typing = UUID()
+            _ = await startTyping(router,secret,UUID(),typing)
+            try await until("typing starts") { gate.isWaiting }
+            let stop = Task { @MainActor in
+                let result = await router.handle(method:"POST",path:"/v1/typing/stop",headers:headers(secret,UUID()),body:Data(#"{"typing_id":"\#(typing)"}"#.utf8))
+                stopped = true
+                return result.value
+            }
+            try await until("cleanup starts") { cleanup != nil }
+            XCTAssertFalse(stopped)
+            cleanup?.resume()
+            let result = await stop.value
+            XCTAssertEqual(result.object?["cleanup"]?.string,"requested")
+            XCTAssertTrue(stopped)
+            XCTAssertEqual(gate.calls,1)
+        }
+    }
+
     func testTypingStopAndKeyChangeCancelWithOneNativeCall() async throws {
         try await fixture { keys, secret, directory in
             let notConfirmed: BBCJSONValue = .object(["ok": .bool(false), "uncertain": .bool(true), "error": .string("typing_not_confirmed")])

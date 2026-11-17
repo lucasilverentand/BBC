@@ -11,11 +11,7 @@ import Darwin
         }
         let request = try JSONDecoder().decode(NativeRequest.self,from:input); decoded(request)
         guard request.method == "typing.start" else { throw ActionFailure.invalid }
-        let parameters = try request.validated(), guid = parameters.message_guid!, deadline = parameters.deadline!
-        let database = try MessagesDatabase(url:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/chat.db"))
-        try database.verify(chat:parameters.chat_guid,message:guid)
-        guard Set(try database.unread(chat:parameters.chat_guid)).isSubset(of:Set(parameters.read_guids!)) else { throw ActionFailure.invalid }
-        let lock = try NativeOperationLock(name:"automation.lock"); defer { lock.release() }
+        let deadline = try request.validated().deadline!
         let flags = fcntl(STDIN_FILENO,F_GETFL)
         guard flags >= 0, fcntl(STDIN_FILENO,F_SETFL,flags|O_NONBLOCK) == 0 else { throw ActionFailure.unavailable }
         func stopped() throws -> Bool {
@@ -25,16 +21,29 @@ import Darwin
             guard count == -1, errno == EAGAIN || errno == EWOULDBLOCK else { throw ActionFailure.invalid }
             return Date().timeIntervalSince1970*1000 >= deadline
         }
+        let receipt = try await perform(request:request,stopped:stopped,progress:progress)
+        FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject:receipt) + Data([10]))
+    }
+    /// Fixture seam: explicit database, bridge and locks; no stdin or host access.
+    static func perform(request: NativeRequest, environment: NativeWorkerEnvironment = .production,
+                        stopped: () throws -> Bool, progress: (String,Bool) -> Void) async throws -> [String:Any] {
+        guard request.method == "typing.start" else { throw ActionFailure.invalid }
+        let parameters = try request.validated(), guid = parameters.message_guid!, deadline = parameters.deadline!
+        let database = try MessagesDatabase(url:environment.databaseURL)
+        try database.verify(chat:parameters.chat_guid,message:guid)
+        guard Set(try database.unread(chat:parameters.chat_guid)).isSubset(of:Set(parameters.read_guids!)) else { throw ActionFailure.invalid }
         if try stopped() {
-            FileHandle.standardOutput.write(Data("{\"ok\":true,\"skipped\":true}\n".utf8)); return
+            return ["ok":true,"skipped":true]
         }
-        let status = await Task.detached { NativeBridgeClient.status() }.value
+        let status = await Task.detached { BBCMessagesActions.bridgeStatus(environment) }.value
         guard status.object?["ready"]?.bool == true else { throw ActionFailure.unavailable }
         let target: [String:BBCJSONValue] = ["chat_guid":.string(parameters.chat_guid),"message_guid":.string(guid),"typing_id":.string(parameters.typing_id!),"deadline":.number(deadline)]
         func native(_ method: String) async throws {
+            let lock = try await NativeOperationLock.acquire(name:"automation.lock",directory:environment.lockDirectory,timeout:environment.lockTimeout)
+            defer { lock.release() }
             var fields = target; fields["method"] = .string(method)
             let packet = BBCJSONValue.object(fields)
-            let reply = try await Task.detached { try NativeBridgeClient.request(packet) }.value
+            let reply = try await Task.detached { try NativeBridgeClient.request(packet,endpoint:environment.endpoint,timeout:environment.bridgeTimeout) }.value
             guard reply.object?["ok"]?.bool == true else { throw reply.object?["uncertain"]?.bool == true ? ActionFailure.uncertain : ActionFailure.unavailable }
         }
         var original: (any Error)?
@@ -47,7 +56,6 @@ import Darwin
         progress("typing_cleanup",true)
         try await native("typing.stop")
         if let original { throw original }
-        let receipt: [String:Any] = ["ok":true,"typing_id":parameters.typing_id!,"cleanup":"confirmed","confirmation":"native-state"]
-        FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject:receipt) + Data([10]))
+        return ["ok":true,"typing_id":parameters.typing_id!,"cleanup":"confirmed","confirmation":"native-state"]
     }
 }

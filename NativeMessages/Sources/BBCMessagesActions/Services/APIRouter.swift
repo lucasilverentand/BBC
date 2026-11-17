@@ -118,7 +118,11 @@ import BBCClient
             let result: BBCJSONValue
             if operationMethod == "typing.stop" {
                 guard let raw = params["typing_id"]?.string, let id = UUID(uuidString: raw) else { throw ActionFailure.invalid }
-                typing.removeValue(forKey: id)?.cancel()
+                if let session = typing[id] {
+                    session.cancel()
+                    // Cancellation closes worker stdin; wait for native cleanup and lock release.
+                    await session.value
+                }
                 result = .object(["ok": .bool(true), "typing_id": .string(id.uuidString), "cleanup": .string("requested")])
             } else if operationMethod == "typing.start" {
                 let id = params["typing_id"]?.string.flatMap(UUID.init(uuidString:)) ?? UUID()
