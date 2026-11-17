@@ -80,3 +80,23 @@ At least one of `text`, `chat_guid`, `from` or `to` is required. Text is a liter
 Results run from newest to oldest. `limit` is 1–200. A call scans at most 400 candidate database rows, including attributed-only message bodies, so a page can contain fewer matches or no matches while `more` remains true. To continue, pass `next_before_rowid` as `before_rowid` and `next_before_chat_guid` as `before_chat_guid`, keeping the original filters. The composite cursor preserves messages associated with more than one conversation.
 
 Search returns exact identities, timestamps, direction, service and up to 1,000 characters of text per result. `text_truncated` identifies a shortened result. Plain text is inspected up to 64,000 characters; attributed-only bodies are decoded up to 256 KB. Larger attributed bodies cannot supply text matches. Database batches contain at most 26 candidates to keep memory bounded. This is a local scan, without an index or writes to Apple's database.
+
+## Incoming typing (ephemeral)
+
+A client can opt into incoming typing observations for **one direct iMessage chat** on its existing SSE connection by adding `X-BBC-Typing-Chat: <exact chat GUID>` to `GET /v1/events`. The accepted GUID prefixes are `any;-;` and `iMessage;-;`. Group typing is unsupported. Malformed scopes fail before streaming. Existing Bearer authentication, per-key peer restrictions, read-only access and connection limits apply; access is rechecked after native observation as well. No scope header means no native typing sampling and no typing events.
+
+`/v1/status` advertises `incoming_typing:true` only when the native bridge is ready and its installed getter ABI supports incoming typing. This capability is separate from outgoing typing leases. A supported ABI cannot guarantee that a particular remote device will transmit a typing indication; clients must keep their fallback timing.
+
+The bridge samples Messages' current incoming typing state using read-only native getters, without opening a chat, loading history, marking anything read, changing delegates or sending a typing signal. It verifies the exact chat, incoming direction and sender against the chat's sole native participant. The API observes approximately once per second while the stream is open. This is best-effort state observation; a transition shorter than the sampling interval can be missed.
+
+```text
+event: bbc.typing
+data: {"type":"typing.started","chat_guid":"any;-;person@example.com","sender_handle":"person@example.com","observed_at":123000,"expires_at":129000,"ttl_ms":6000}
+
+```
+
+`type` is `typing.started`, `typing.stopped` or `typing.expired`. Timestamps are Unix **milliseconds**. A start includes an absolute expiry and remaining TTL of at most 8,000 ms, bounded by the native typing message's timestamp. Repeated samples of the same native indication do not extend it. A native cancellation, cleared indicator or subsequent message ends the observed lease; missing callbacks, an unavailable bridge or a stale getter eventually expire it. Stop has `ttl_ms:0`; expiry keeps the expired deadline. No content or native typing-message GUID is exposed.
+
+These frames have **no SSE `id`**, never enter the replay journal or webhook outbox, and never advance the durable stream cursor. On reconnect, clients clear their local typing state and may receive a new observation if the native indication is still fresh. Expire locally at `expires_at` even if a connection stalls or closes before a stop/expiry frame. Do not restore typing state from a durable message checkpoint. Ignore unknown ephemeral event kinds rather than assigning them provider-message or owner-command authority.
+
+Consumers must match both the already-admitted exact owner chat and sender handle before applying the hint. Incoming typing is advisory, never owner proof or a reason to mark a message read. Preserve a bounded reply delay (Seven uses an eight-second hard cap) and work normally when this capability or signal is absent.

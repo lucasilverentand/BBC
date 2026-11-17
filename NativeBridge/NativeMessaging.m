@@ -87,10 +87,48 @@ static id FirstPart(id message) {
     return part;
 }
 
+// Read-only getters only. Never load history, change a delegate, or synthesize a
+// typing message merely to observe the remote participant.
+static BOOL Getter(Class cls, NSString *name, char type) {
+    NSMethodSignature *sig = [cls instanceMethodSignatureForSelector:NSSelectorFromString(name)];
+    return sig && sig.numberOfArguments == 2 && sig.methodReturnType[0] == type;
+}
+static BOOL IncomingTypingSupported(BBCNativeClassResolver resolver) {
+    Class chat = Resolve(@"IMChat",resolver), message = Resolve(@"IMMessage",resolver), handle = Resolve(@"IMHandle",resolver);
+    return Getter(chat,@"lastIncomingMessage",'@') && Getter(chat,@"isLastMessageTypingIndicator",'B') && Getter(chat,@"participants",'@') &&
+        Getter(message,@"isTypingMessage",'B') && Getter(message,@"isCancelTypingMessage",'B') && Getter(message,@"isFromMe",'B') &&
+        Getter(message,@"sender",'@') && Getter(message,@"time",'@') && Getter(message,@"guid",'@') && Getter(handle,@"ID",'@');
+}
+static NSDictionary *IncomingTyping(NSDictionary *request, BBCNativeClassResolver resolver) {
+    @try {
+        NSString *guid = request[@"chat_guid"];
+        if (!Text(guid,512) || !([guid hasPrefix:@"any;-;"] || [guid hasPrefix:@"iMessage;-;"]) || !IncomingTypingSupported(resolver)) return Failure(@"incoming_typing_unsupported",NO);
+        id registry = Invoke(Resolve(@"IMChatRegistry",resolver),@"sharedInstance",@[]);
+        id chat = Invoke(registry,@"existingChatWithGUID:",@[guid]);
+        if (!chat || ![Invoke(chat,@"guid",@[]) isEqual:guid]) return Failure(@"native_chat_missing",NO);
+        id participants = Invoke(chat,@"participants",@[]);
+        if (![participants isKindOfClass:NSArray.class] || [participants count] != 1) return Failure(@"incoming_typing_direct_chat_required",NO);
+        id message = Invoke(chat,@"lastIncomingMessage",@[]);
+        if (!message || ![Invoke(chat,@"isLastMessageTypingIndicator",@[]) boolValue] ||
+            ![Invoke(message,@"isTypingMessage",@[]) boolValue] || [Invoke(message,@"isCancelTypingMessage",@[]) boolValue] || [Invoke(message,@"isFromMe",@[]) boolValue])
+            return @{@"ok":@YES,@"active":@NO,@"chat_guid":guid};
+        NSString *sender = Invoke(Invoke(message,@"sender",@[]),@"ID",@[]);
+        NSString *participant = Invoke([participants firstObject],@"ID",@[]);
+        NSString *source = Invoke(message,@"guid",@[]);
+        NSDate *time = Invoke(message,@"time",@[]);
+        double now = NSDate.date.timeIntervalSince1970;
+        if (!Text(sender,254) || ![sender isEqual:participant] || !Text(source,256) || ![time isKindOfClass:NSDate.class] || !isfinite(time.timeIntervalSince1970) || time.timeIntervalSince1970 > now+1) return Failure(@"incoming_typing_identity_unavailable",NO);
+        // A stale getter cannot renew a lease on every poll or after reconnect.
+        return @{@"ok":@YES,@"active":@YES,@"chat_guid":guid,@"sender_handle":sender,@"source_guid":source,
+                 @"expires_at":@(MIN(now+8,time.timeIntervalSince1970+8)*1000)};
+    } @catch (NSException *exception) { return Failure(@"incoming_typing_unavailable",NO); }
+}
+
 NSArray<NSString *> *BBCNativeCapabilities(BBCNativeClassResolver resolver) {
     Class registry = Resolve(@"IMChatRegistry", resolver), message = Resolve(@"IMMessage", resolver), chat = Resolve(@"IMChat", resolver);
     if (!Has(registry, @"sharedInstance")) return @[];
     NSMutableArray *features = [NSMutableArray array];
+    if (IncomingTypingSupported(resolver)) [features addObject:@"incoming-typing"];
     if ([chat instancesRespondToSelector:NSSelectorFromString(@"markAllMessagesAsRead")]) [features addObject:@"read"];
     if ([chat instancesRespondToSelector:NSSelectorFromString(@"setLocalUserIsTyping:")]) [features addObject:@"typing"];
     BOOL canSend = [chat instancesRespondToSelector:NSSelectorFromString(@"sendMessage:onService:")] && Has(Resolve(@"IMService",resolver),@"iMessageService");
@@ -106,6 +144,7 @@ NSArray<NSString *> *BBCNativeCapabilities(BBCNativeClassResolver resolver) {
 }
 
 static void PerformWithMessageLoad(NSDictionary *request, BBCNativeClassResolver resolver, BOOL loadRequested, double loadDeadline, double loadTimeout, double scanTimeout, BBCNativeCompletion completion) {
+    if ([request[@"method"] isEqual:@"typing.observe"]) { completion(IncomingTyping(request,resolver)); return; }
     if ([AdvancedMethods() containsObject:request[@"method"] ?: NSNull.null]) { PerformAdvanced(request,resolver,completion); return; }
     __block BOOL attempted = NO;
     @try {
