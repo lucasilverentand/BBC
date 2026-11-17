@@ -109,11 +109,11 @@ static NSDictionary *IncomingTyping(NSDictionary *request, BBCNativeClassResolve
         id participants = Invoke(chat,@"participants",@[]);
         if (![participants isKindOfClass:NSArray.class] || [participants count] != 1) return Failure(@"incoming_typing_direct_chat_required",NO);
         id message = Invoke(chat,@"lastIncomingMessage",@[]);
-        NSDictionary *flags = @{@"has_incoming":@(message != nil),
+        NSDictionary *flags = @{@"has_incoming":@((BOOL)(message != nil)),
             @"current_indicator":@([Invoke(chat,@"isLastMessageTypingIndicator",@[]) boolValue]),
-            @"typing_message":@(message && [Invoke(message,@"isTypingMessage",@[]) boolValue]),
-            @"cancelled":@(message && [Invoke(message,@"isCancelTypingMessage",@[]) boolValue]),
-            @"from_me":@(message && [Invoke(message,@"isFromMe",@[]) boolValue])};
+            @"typing_message":@((BOOL)(message && [Invoke(message,@"isTypingMessage",@[]) boolValue])),
+            @"cancelled":@((BOOL)(message && [Invoke(message,@"isCancelTypingMessage",@[]) boolValue])),
+            @"from_me":@((BOOL)(message && [Invoke(message,@"isFromMe",@[]) boolValue]))};
         if (!message || ![flags[@"current_indicator"] boolValue] || ![flags[@"typing_message"] boolValue] ||
             [flags[@"cancelled"] boolValue] || [flags[@"from_me"] boolValue])
             return @{@"ok":@YES,@"active":@NO,@"chat_guid":guid,@"observation":flags};

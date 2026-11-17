@@ -43,6 +43,14 @@ final class IncomingTypingTests: XCTestCase {
         XCTAssertEqual(Set(result.keys),["ok","active","chat_guid","sender_handle","source_guid","expires_at","observation"])
         XCTAssertLessThanOrEqual(result["expires_at"] as! Double,Date().addingTimeInterval(8).timeIntervalSince1970*1000)
     }
+    func testDiagnosticFlagsAreJSONBooleans() throws {
+        let flags = try XCTUnwrap(observe()["observation"] as? [String:Any])
+        let json = String(decoding:try JSONSerialization.data(withJSONObject:flags,options:.sortedKeys),as:UTF8.self)
+        XCTAssertTrue(json.contains("\"has_incoming\":true"))
+        XCTAssertTrue(json.contains("\"typing_message\":true"))
+        XCTAssertTrue(json.contains("\"cancelled\":false"))
+        XCTAssertTrue(json.contains("\"from_me\":false"))
+    }
     func testCancellationOwnTypingMissingAndWrongChatFailClosed() {
         IncomingChat.current.lastIncomingMessage?.isCancelTypingMessage = true
         XCTAssertEqual(observe()["active"] as? Bool,false)
