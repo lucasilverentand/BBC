@@ -28,6 +28,12 @@ final class IncomingTypingLeaseTests: XCTestCase {
         XCTAssertTrue(lease.update(sample(expires:999999),chat:chat,now:1000).isEmpty)
         XCTAssertTrue(lease.update(.object(["ok":.bool(false)]),chat:chat,now:1000).isEmpty)
     }
+    func testDiagnosticsCannotForwardContentOrIdentitiesAndReportNativeFailure() {
+        let raw = BBCJSONValue.object(["ok":.bool(true),"active":.bool(false),"text":.string("private"),"sender_handle":.string("secret@example.test"),"source_guid":.string("private-source"),"observation":.object(["typing_message":.bool(false),"text":.string("private")])])
+        XCTAssertEqual(IncomingTypingDiagnostic.packet(raw,now:1000),.object(["available":.bool(true),"state":.string("idle"),"typing_message":.bool(false)]))
+        XCTAssertEqual(IncomingTypingDiagnostic.packet(.object(["ok":.bool(false),"failure_code":.string("native_chat_missing")]),now:1000).object?["reason"]?.string,"native_chat_missing")
+        XCTAssertEqual(IncomingTypingDiagnostic.packet(.object(["failure_code":.string("private")]),now:1000).object?["reason"]?.string,"native_sample_unavailable")
+    }
     @MainActor func testUnauthorizedOrUnscopedStreamsDoNotTouchNativeObserver() async throws {
         actor Counter { var value = 0; func record() { value += 1 } }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

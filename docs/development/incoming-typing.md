@@ -7,3 +7,7 @@ BBC's embedded bridge uses its own scoped getter implementation. It does not swi
 Development provenance: [BlueBubbles' IMCore observations](https://github.com/BlueBubblesApp/bluebubbles-docs/blob/master/private-api/imcore-documentation.md) identify incoming typing-message getters and describe timing problems in callback interception. This informed the read-only getter investigation; it is not a runtime dependency or an operator prerequisite. BBC uses bounded sampling and an expiry derived from the native timestamp instead of installing those interception hooks.
 
 Synthetic tests prove direction/sender/scope validation, cancellation, stale deadlines, non-renewal, ephemeral framing, authentication and exclusion from replay storage. Recipient-generated typing transitions still require acceptance on a configured host; selector presence alone must not be reported as that acceptance.
+
+## Live acceptance follow-up
+
+After #32 was installed on 2026-11-17, the authenticated gateway reported a ready native bridge and incoming-typing ABI capability, and a scoped SSE connection returned HTTP 200. During a fresh capture the operator confirmed typing briefly and clearing the draft; no typing frame arrived. That check did **not** establish working remote indication observation. Scoped, content-free native diagnostics were added to distinguish an idle native snapshot from lookup/signature/identity failure before repeating acceptance. Clients must retain fallback timing; the capability flag alone is not recipient-device proof.

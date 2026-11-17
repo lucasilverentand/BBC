@@ -109,9 +109,14 @@ static NSDictionary *IncomingTyping(NSDictionary *request, BBCNativeClassResolve
         id participants = Invoke(chat,@"participants",@[]);
         if (![participants isKindOfClass:NSArray.class] || [participants count] != 1) return Failure(@"incoming_typing_direct_chat_required",NO);
         id message = Invoke(chat,@"lastIncomingMessage",@[]);
-        if (!message || ![Invoke(chat,@"isLastMessageTypingIndicator",@[]) boolValue] ||
-            ![Invoke(message,@"isTypingMessage",@[]) boolValue] || [Invoke(message,@"isCancelTypingMessage",@[]) boolValue] || [Invoke(message,@"isFromMe",@[]) boolValue])
-            return @{@"ok":@YES,@"active":@NO,@"chat_guid":guid};
+        NSDictionary *flags = @{@"has_incoming":@(message != nil),
+            @"current_indicator":@([Invoke(chat,@"isLastMessageTypingIndicator",@[]) boolValue]),
+            @"typing_message":@(message && [Invoke(message,@"isTypingMessage",@[]) boolValue]),
+            @"cancelled":@(message && [Invoke(message,@"isCancelTypingMessage",@[]) boolValue]),
+            @"from_me":@(message && [Invoke(message,@"isFromMe",@[]) boolValue])};
+        if (!message || ![flags[@"current_indicator"] boolValue] || ![flags[@"typing_message"] boolValue] ||
+            [flags[@"cancelled"] boolValue] || [flags[@"from_me"] boolValue])
+            return @{@"ok":@YES,@"active":@NO,@"chat_guid":guid,@"observation":flags};
         NSString *sender = Invoke(Invoke(message,@"sender",@[]),@"ID",@[]);
         NSString *participant = Invoke([participants firstObject],@"ID",@[]);
         NSString *source = Invoke(message,@"guid",@[]);
@@ -119,7 +124,7 @@ static NSDictionary *IncomingTyping(NSDictionary *request, BBCNativeClassResolve
         double now = NSDate.date.timeIntervalSince1970;
         if (!Text(sender,254) || ![sender isEqual:participant] || !Text(source,256) || ![time isKindOfClass:NSDate.class] || !isfinite(time.timeIntervalSince1970) || time.timeIntervalSince1970 > now+1) return Failure(@"incoming_typing_identity_unavailable",NO);
         // A stale getter cannot renew a lease on every poll or after reconnect.
-        return @{@"ok":@YES,@"active":@YES,@"chat_guid":guid,@"sender_handle":sender,@"source_guid":source,
+        return @{@"ok":@YES,@"active":@YES,@"chat_guid":guid,@"sender_handle":sender,@"source_guid":source,@"observation":flags,
                  @"expires_at":@(MIN(now+8,time.timeIntervalSince1970+8)*1000)};
     } @catch (NSException *exception) { return Failure(@"incoming_typing_unavailable",NO); }
 }
