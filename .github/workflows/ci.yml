@@ -18,7 +18,7 @@ jobs:
         run: apt-get update && apt-get install -y --no-install-recommends python3 libsqlite3-dev
       - run: python3 -m unittest discover -s script -p 'test_*.py'
       - run: python3 script/test_swift.py . --min-tests 16 --log build/test-logs/linux.log
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: bbc-linux-test-logs
@@ -35,7 +35,7 @@ jobs:
       - run: python3 -m unittest discover -s script -p 'test_*.py'
       - run: /usr/bin/ruby script/test_release.rb
       - run: python3 script/test_swift.py . --min-tests 25 --log build/test-logs/sdk.log
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: bbc-transport-test-logs
@@ -54,7 +54,7 @@ jobs:
           persist-credentials: false
       - name: Verify unsigned release build, suites, bridge ABI and icon
         run: bash script/validate_hosted_toolchain.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: bbc-native-validation
